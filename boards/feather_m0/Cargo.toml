@@ -57,7 +57,7 @@ panic-probe = "0.3"
 
 [features]
 # ask the HAL to enable atsamd21g support
-default = ["rt", "atsamd-hal/samd21g"]
+default = ["rt", "atsamd-hal/samd21g", "async", "dma"]
 rt = ["cortex-m-rt", "atsamd-hal/samd21g-rt"]
 use_rtt = ["atsamd-hal/use_rtt"]
 usb = ["atsamd-hal/usb", "usb-device"]
@@ -177,4 +177,4 @@ required-features = ["dma", "async"]
 
 [[example]]
 name = "async_uart"
-required-features = ["dma", "async"]
+# required-features = ["dma", "async"]

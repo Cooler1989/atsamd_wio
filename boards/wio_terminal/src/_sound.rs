@@ -1,7 +1,7 @@
 use atsamd_hal::adc::Adc;
 use atsamd_hal::clock::GenericClockController;
 use atsamd_hal::pac::gclk::pchctrl::GEN_A::GCLK11;
-use atsamd_hal::pac::{ADC1, MCLK, TCC0};
+use atsamd_hal::pac::{Adc1, MCLK, Tcc0};
 use atsamd_hal::prelude::*;
 use atsamd_hal::pwm::{TCC0Pinout, Tcc0Pwm};
 
@@ -15,11 +15,11 @@ pub struct Buzzer {
 
 impl Buzzer {
     /// Initialize the pin connected to the piezo buzzer. Configure the pin as a
-    /// PWM output using TCC0, and return the Pwm instance.
+    /// PWM output using Tcc0, and return the Pwm instance.
     pub fn init(
         self,
         clocks: &mut GenericClockController,
-        tcc0: TCC0,
+        tcc0: Tcc0,
         mclk: &mut MCLK,
     ) -> Tcc0Pwm<BuzzerCtrlId, BuzzerCtrlMode> {
         let pinout = TCC0Pinout::Pd11(self.ctr);
@@ -48,7 +48,7 @@ impl Microphone {
     /// peripheral and the configured pin.
     pub fn init(
         self,
-        adc: ADC1,
+        adc: Adc1,
         clocks: &mut GenericClockController,
         mclk: &mut MCLK,
     ) -> (Adc<ADC1>, MicOutput) {

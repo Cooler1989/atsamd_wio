@@ -4,7 +4,7 @@ use atsamd_hal::{
     ehal::blocking::delay::DelayMs,
     ehal::digital::v2::OutputPin,
     ehal::serial::{Read, Write},
-    pac::{interrupt, MCLK, SERCOM0},
+    pac::{interrupt, MCLK, Sercom0 as PacSercom0},
     prelude::*,
     sercom::{uart, IoSet2, Sercom0},
 };
@@ -56,7 +56,7 @@ pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
 impl Wifi {
     pub fn init(
         pins: WifiPins,
-        sercom0: SERCOM0,
+        sercom0: PacSercom0,
         clocks: &mut GenericClockController,
         mclk: &mut MCLK,
         delay: &mut Delay,

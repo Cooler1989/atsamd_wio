@@ -19,28 +19,53 @@ pub use atsamd_hal::{self as hal, pac};
 
 // The accelerometer crate contains a number of traits and types which may be
 // useful to the user.
-pub use lis3dh::accelerometer;
+//  pub use lis3dh::accelerometer;
 
 // `prelude` is the only module from this crate which is public, as the
 // remaining have their members exposed via the Sets struct.
 pub mod prelude;
 
-mod buttons;
-mod display;
-mod pins;
-mod sensors;
-mod serial;
-mod sound;
-mod storage;
+//  mod buttons;
+//  mod display;
+//  mod pins;
+//  mod sensors;
+//  mod serial;
+//  mod sound;
+//  mod storage;
 
-pub use buttons::*;
-pub use display::*;
-pub use pins::Pins;
-pub use pins::*;
-pub use sensors::*;
-pub use serial::*;
-pub use sound::*;
-pub use storage::*;
+//  pub use buttons::*;
+//  pub use display::*;
+//  pub use pins::Pins;
+//  use atsamd_hal::gpio::Pins;
+//  pub use pins::*;
+//  pub use sensors::*;
+//  pub use serial::*;
+//  pub use sound::*;
+//  pub use storage::*;
+
+pub mod pins {
+    use super::hal;
+    
+    hal::bsp_pins!(
+        PA15 {
+        /// User LED
+            name: user_led,
+            aliases: {
+            PushPullOutput: UserLed,
+            Reset: UserLedReset,
+        }
+        //  PA13 {
+        //      name: a0_d0,
+        //      aliases: {
+        //      PushPullOutput: OpenThermTxPin,
+        //      }
+        //  }
+        //  PA14 {
+        //      name: a1_d1,
+        //  }
+    }
+);
+}
 
 #[cfg(feature = "wifi")]
 mod wifi;

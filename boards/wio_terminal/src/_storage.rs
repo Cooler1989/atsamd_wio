@@ -1,6 +1,6 @@
 use atsamd_hal::{
     clock::{GenericClockController, Sercom6CoreClock},
-    pac::{MCLK, QSPI, SERCOM6},
+    pac::{MCLK, QSPI, Sercom6 as PacSercom6},
     prelude::*,
     qspi,
     sercom::{spi, IoSet1, Sercom6},
@@ -40,7 +40,7 @@ impl QSPIFlash {
     }
 }
 
-/// SD Card pins (uses `SERCOM6`)
+/// SD Card pins (uses `Sercom6`)
 pub struct SDCard {
     /// SD Card chip select pin
     pub cs: SdCsReset,
@@ -95,7 +95,7 @@ impl SDCard {
     pub fn init<TS: TimeSource>(
         self,
         clocks: &mut GenericClockController,
-        sercom6: SERCOM6,
+        sercom6: PacSercom6,
         mclk: &mut MCLK,
         ts: TS,
     ) -> Result<(SDCardController<TS>, SdDet), ()> {
