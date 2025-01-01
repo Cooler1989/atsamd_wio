@@ -1,5 +1,5 @@
 use atsamd_hal::clock::GenericClockController;
-use atsamd_hal::pac::{self, MCLK, SERCOM2};
+use atsamd_hal::pac::{self, MCLK, Sercom2 as PacSercom2};
 use atsamd_hal::sercom::{uart, IoSet2, Sercom2};
 use atsamd_hal::time::Hertz;
 
@@ -10,7 +10,7 @@ use pac::gclk::{genctrl::SRC_A, pchctrl::GEN_A};
 
 use super::pins::aliases::*;
 
-/// Uart pins (uses `SERCOM2`)
+/// Uart pins (uses `Sercom2`)
 pub struct Uart {
     /// UART transmit pin
     pub tx: UartTxReset,
@@ -32,7 +32,7 @@ impl Uart {
         self,
         clocks: &mut GenericClockController,
         baud: F,
-        sercom2: SERCOM2,
+        sercom2: PacSercom2,
         mclk: &mut MCLK,
     ) -> HalUart {
         let gclk0 = clocks.gclk0();

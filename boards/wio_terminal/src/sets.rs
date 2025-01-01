@@ -1,9 +1,9 @@
 use super::buttons::ButtonPins;
 //  use super::display::Display;
 //  use super::sensors::{Accelerometer, LightSensor};
-//  use super::serial::{Uart, Usb};
+use super::serial::{Uart, Usb};
 //  use super::sound::{Buzzer, Microphone};
-//  use super::storage::{QSPIFlash, SDCard};
+use super::storage::{QSPIFlash, SDCard};
 //  use super::wifi::WifiPins;
 
 /// [`Pin`](atsamd_hal::gpio::Pin) aliases defined by the
@@ -497,6 +497,157 @@ pub mod aliases {
 }
 pub use aliases::Pins;
 use aliases::*;
+
+/// Sets of pins split apart by category
+pub struct Sets {
+    /// Accelerometer I2C pins
+    pub accelerometer: Accelerometer,
+
+    /// Buzzer pins
+    pub buzzer: Buzzer,
+
+    /// LCD display pins
+    pub display: Display,
+
+    /// QSPI Flash pins
+    pub flash: QSPIFlash,
+
+    /// Analog Light Sensor pins
+    pub light_sensor: LightSensor,
+
+    /// Microphone output pins
+    pub microphone: Microphone,
+
+    /// SD Card pins
+    pub sd_card: SDCard,
+
+    /// UART (external pinout) pins
+    pub uart: Uart,
+
+    /// USB pins
+    pub usb: Usb,
+
+    /// LED pin
+    pub user_led: UserLedResect,
+
+    pub buttons: ButtonPins,
+    // WiFi pins
+    pub wifi: WifiPins,
+
+    pub header_pins: HeaderPins,
+}
+
+impl Pins {
+    /// Split the device pins into subsets
+    pub fn split(mut self) -> Sets {
+        let accelerometer = Accelerometer {
+            scl: self.i2c0_scl,
+            sda: self.i2c0_sda,
+        };
+
+        let buzzer = Buzzer {
+            ctr: self.buzzer_ctr,
+        };
+
+        let display = Display {
+            miso: self.lcd_miso,
+            mosi: self.lcd_mosi,
+            sck: self.lcd_sck,
+            cs: self.lcd_cs,
+            dc: self.lcd_dc,
+            reset: self.lcd_reset,
+            backlight: self.lcd_backlight,
+        };
+
+        let flash = QSPIFlash {
+            sck: self.mcu_flash_qspi_clk,
+            cs: self.mcu_flash_qspi_cs,
+            d0: self.mcu_flash_qspi_io0,
+            d1: self.mcu_flash_qspi_io1,
+            d2: self.mcu_flash_qspi_io2,
+            d3: self.mcu_flash_qspi_io3,
+        };
+
+        let light_sensor = LightSensor {
+            pd1: self.fpc_d13_a13,
+        };
+
+        let microphone = Microphone {
+            mic: self.mic_output,
+        };
+
+        let sd_card = SDCard {
+            cs: self.sd_cs,
+            mosi: self.sd_mosi,
+            sck: self.sd_sck,
+            miso: self.sd_miso,
+            det: self.sd_det,
+        };
+
+        let uart = Uart {
+            rx: self.uart_rx,
+            tx: self.uart_tx,
+        };
+
+        let usb = Usb {
+            dm: self.usb_dm,
+            dp: self.usb_dp,
+        };
+
+        let user_led = self.user_led;
+
+        let header_pins = HeaderPins {
+            a0_d0: self.a0_d0,
+            a1_d1: self.a1_d1,
+            a2_d2: self.a2_d2,
+            a3_d3: self.a3_d3,
+            a4_d4: self.a4_d4,
+            a5_d5: self.a5_d5,
+            a6_d6: self.a6_d6,
+            a7_d7: self.a7_d7,
+            a8_d8: self.a8_d8,
+        };
+
+        let buttons = ButtonPins {
+            button1: self.button1,
+            button2: self.button2,
+            button3: self.button3,
+            switch_x: self.switch_x,
+            switch_y: self.switch_y,
+            switch_z: self.switch_z,
+            switch_u: self.switch_u,
+            switch_b: self.switch_b,
+        };
+
+        let wifi = WifiPins {
+            pwr: self.rtl8720d_chip_pu,
+            rxd: self.rtl8720d_rxd,
+            txd: self.rtl8720d_txd,
+            mosi: self.rtl8720d_hspi_mosi,
+            clk: self.rtl8720d_hspi_clk,
+            miso: self.rtl8720d_hspi_miso,
+            cs: self.rtl8720d_hspi_cs,
+            ready: self.rtl8720d_data_ready,
+            dir: self.rtl8720d_dir,
+        };
+
+        Sets {
+            accelerometer,
+            buzzer,
+            display,
+            flash,
+            light_sensor,
+            microphone,
+            sd_card,
+            uart,
+            usb,
+            user_led,
+            buttons,
+            wifi,
+            header_pins,
+        }
+    }
+}
 
 /// Other pins broken out to the RPi-compatible header.
 pub struct HeaderPins {

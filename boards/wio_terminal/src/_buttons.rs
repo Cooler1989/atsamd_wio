@@ -1,13 +1,15 @@
 use atsamd_hal::clock::GenericClockController;
-use atsamd_hal::eic;
-use atsamd_hal::eic::pin::{
-    ExtInt10, ExtInt11, ExtInt12, ExtInt3, ExtInt4, ExtInt5, ExtInt7, ExternalInterrupt, Sense,
-};
-use atsamd_hal::pac::{interrupt, EIC, MCLK};
+use atsamd_hal::eic::{Eic, Sense};
+//  use atsamd_hal::eic::pin::{
+//      ExtInt10, ExtInt11, ExtInt12, ExtInt3, ExtInt4, ExtInt5, ExtInt7, ExternalInterrupt, Sense,
+//  };
+use atsamd_hal::pac::{interrupt, Eic as PacEic, Mclk};
 
 use cortex_m::peripheral::NVIC;
 
 use super::pins::aliases::*;
+
+use atsamd_hal::eic;
 
 /// pushbuttons and joystick
 pub struct ButtonPins {
@@ -33,13 +35,13 @@ pub struct ButtonPins {
 impl ButtonPins {
     pub fn init(
         self,
-        eic: EIC,
+        eic: PacEic,
         clocks: &mut GenericClockController,
-        mclk: &mut MCLK,
+        mclk: &mut Mclk,
     ) -> ButtonController {
         let gclk1 = clocks.gclk1();
         let eic_clock = clocks.eic(&gclk1).unwrap();
-        let mut eic = eic::init_with_ulp32k(mclk, eic_clock, eic);
+        //  let mut eic = eic::init_with_ulp32k(mclk, eic_clock, eic);
 
         eic.button_debounce_pins(&[
             self.button1.id(),
@@ -52,27 +54,47 @@ impl ButtonPins {
             self.switch_b.id(),
         ]);
 
+        let eic_channels = Eic::new(&mut mclk, eic_clock, eic).split();
+
+        //  let button: Pin<_, PullUpInterrupt> = pins.d10.into();
+        //  let mut extint = eic_channels.2.with_pin(button);
+
+        //  extint.sense(Sense::Fall);
+        //  extint.enable_interrupt();
+
         // Unfortunately, the pin assigned to B1 shares the same
         // ExtInt line as up on the joystick. As such, we don't
         // support B1.
+        
+        // let eic_clock = clocks.eic(&gclk0).unwrap();
+        // // Initialize the EIC peripheral
+        // let eic = Eic::new(&mut peripherals.pm, eic_clock, peripherals.eic);
+        // // Split into channels
+        // let eic_channels = eic.split();
+        //
+        // // Take the pin that we want to use
+        // let button: Pin<_, PullUpInterrupt> = pins.d10.into();
+        //
+        // // Turn the EXTINT[2] channel into an ExtInt struct
+        // let mut extint = eic_channels.2.with_pin(button);
 
         // let mut b1 = self.button1.into_floating_ei(port);
-        let mut b2 = ExtInt11::new(self.button2.into());
-        let mut b3 = ExtInt12::new(self.button3.into());
-        let mut x = ExtInt3::new(self.switch_x.into());
-        let mut y = ExtInt4::new(self.switch_y.into());
-        let mut z = ExtInt5::new(self.switch_z.into());
-        let mut u = ExtInt10::new(self.switch_u.into());
-        let mut b = ExtInt7::new(self.switch_b.into());
+        let mut b2 = eic_channels.11.with_pin(self.button2.into());
+        let mut b3 = eic_channels.12.with_pin(self.button3.into());
+        let mut x = eic_channels.3.with_pin(self.switch_x.into());
+        let mut y = eic_channels.4.with_pin(self.switch_y.into());
+        let mut z = eic_channels.5.with_pin(self.switch_z.into());
+        let mut u = eic_channels.10.with_pin(self.switch_u.into());
+        let mut b = eic_channels.7.with_pin(self.switch_b.into());
 
-        // b1.sense(&mut eic, Sense::BOTH);
-        b2.sense(&mut eic, Sense::BOTH);
-        b3.sense(&mut eic, Sense::BOTH);
-        x.sense(&mut eic, Sense::BOTH);
-        y.sense(&mut eic, Sense::BOTH);
-        z.sense(&mut eic, Sense::BOTH);
-        u.sense(&mut eic, Sense::BOTH);
-        b.sense(&mut eic, Sense::BOTH);
+        // b1.sense(&mut eic, Sense::Both);
+        b2.sense(&mut eic, Sense::Both);
+        b3.sense(&mut eic, Sense::Both);
+        x.sense(&mut eic, Sense::Both);
+        y.sense(&mut eic, Sense::Both);
+        z.sense(&mut eic, Sense::Both);
+        u.sense(&mut eic, Sense::Both);
+        b.sense(&mut eic, Sense::Both);
 
         // b1.enable_interrupt(&mut eic);
         b2.enable_interrupt(&mut eic);
@@ -116,7 +138,7 @@ pub struct ButtonEvent {
 }
 
 pub struct ButtonController {
-    _eic: eic::EIC,
+    _eic: eic::Eic,
     // b1: ExtInt10<Button1>,
     b2: ExtInt11<Button2>,
     b3: ExtInt12<Button3>,

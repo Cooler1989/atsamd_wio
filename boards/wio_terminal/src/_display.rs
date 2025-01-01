@@ -1,8 +1,8 @@
 use atsamd_hal::clock::GenericClockController;
-use atsamd_hal::ehal::blocking::delay::DelayMs;
-use atsamd_hal::ehal::digital::v2::OutputPin;
+use atsamd_hal::ehal::delay::DelayNs;
+//  use atsamd_hal::ehal::digital::v2::OutputPin;
 use atsamd_hal::ehal::spi::{Phase, Polarity};
-use atsamd_hal::pac::{MCLK, SERCOM7};
+use atsamd_hal::pac::{MCLK, Sercom7 as PacSercom7};
 use atsamd_hal::sercom::spi;
 use atsamd_hal::sercom::{IoSet4, Sercom7};
 use atsamd_hal::time::Hertz;
@@ -51,7 +51,7 @@ impl Display {
     pub fn init<D: DelayMs<u16>>(
         self,
         clocks: &mut GenericClockController,
-        sercom7: SERCOM7,
+        sercom7: PacSercom7,
         mclk: &mut MCLK,
         baud: Hertz,
         delay: &mut D,
