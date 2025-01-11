@@ -5,21 +5,28 @@ use defmt_rtt as _;
 use panic_probe as _;
 use heapless::Vec;
 use core::time::Duration;
+use bsp::hal::time::Hertz;
 
 use bsp::pac;
 use bsp::{
     hal, 
     hal::gpio::{Pins, Output, PushPullOutput, PushPull, OutputConfig},
-    hal::gpio::{PB09},
+    hal::gpio::{E, PB09},
     pin_alias,
 };
+use wio_terminal::prelude::_embedded_hal_PwmPin;
 
 use hal::{
     clock::{ClockGenId, ClockSource, GenericClockController},
+    dmac::{DmaController, PriorityLevel, TriggerAction, TriggerSource},
     ehal::digital::StatefulOutputPin,
     eic::{Eic, Sense},
     gpio::{Pin, PullUpInterrupt},
+    pwm::{Pwm4, TC4Pinout},
+    delay::Delay,
+    delay::*,
 };
+use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 
 use bsp::pins::UserLed;
 use wio_terminal as bsp;
@@ -37,6 +44,10 @@ use boiler::{TimeBaseRef, Instant, BoilerControl};
 
 atsamd_hal::bind_interrupts!(struct Irqs {
     EIC_EXTINT_5 => atsamd_hal::eic::InterruptHandler;
+});
+
+atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
+    DMAC: [DMAC_0, DMAC_1, DMAC_2, DMAC_OTHER] => atsamd_hal::dmac::InterruptHandler;
 });
 
 #[embassy_executor::task]
@@ -97,7 +108,8 @@ impl TimeBaseRef for AtsamdTimeDriver {
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
     let mut peripherals = pac::Peripherals::take().unwrap();
-    let _core = pac::CorePeripherals::take().unwrap();
+    let core = pac::CorePeripherals::take().unwrap();
+    //  let core = CorePeripherals::take().unwrap();
 
     spawner.spawn(boiler_task()).unwrap();
 
@@ -108,7 +120,51 @@ async fn main(spawner: embassy_executor::Spawner) {
         &mut peripherals.oscctrl,
         &mut peripherals.nvmctrl,
     );
+    let gclk0 = clocks.gclk0();
+    let mut delay = Delay::new(core.SYST, &mut clocks);
+
+    // Initialize DMA Controller
+    let dmac = DmaController::init(peripherals.dmac, &mut peripherals.pm);
+    // Turn dmac into an async controller
+    let mut dmac = dmac.into_future(DmacIrqs);
+    // Get individual handles to DMA channels
+    let channels = dmac.split();
+    // Initialize DMA Channels 0 and 1
+    let mut channel0 = channels.0.init(PriorityLevel::Lvl0);
+    let channel1 = channels.1.init(PriorityLevel::Lvl0);
+
+    let mut source = [0xff; 100];
+    let mut dest = [0x0; 100];
+    channel0
+        .transfer_future(
+            &mut source,
+            &mut dest,
+            TriggerSource::Disable,
+            TriggerAction::Block,
+        )
+        .await
+        .unwrap();
+
     let pins = Pins::new(peripherals.port);
+    let pwm_pin = pins.pb09.into_alternate::<E>();
+
+    let mut pwm4 = Pwm4::<PB09>::new(
+        &clocks.tc4_tc5(&gclk0).unwrap(),
+        Hertz::from_raw(1000),
+        peripherals.tc4,
+        TC4Pinout::Pb9(pwm_pin),
+        &mut peripherals.mclk,
+    );
+
+    let max_duty = pwm4.get_max_duty();
+
+    loop {
+        pwm4.set_duty(max_duty / 2);
+        delay.delay_ms(2000u16);
+        pwm4.set_duty(max_duty / 8);
+        delay.delay_ms(2000u16);
+    }
+
     //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
     let mut user_led: UserLed = pins.pa15.into();
 
@@ -124,14 +180,16 @@ async fn main(spawner: embassy_executor::Spawner) {
     let eic_channels = Eic::new(&mut peripherals.mclk, eic_clock, peripherals.eic).split();
 
     let _ot_rx: Pin<_, PullUpInterrupt> = pins.pb08.into(); // D0
-    let pb_09_ot_tx: Pin<_, PushPullOutput> = pins.pb09.into(); // D1
+    //  let pb_09_ot_tx: Pin<_, PushPullOutput> = pins.pb09.into(); // D1
     //  let capture_device = RpEdgeCapture::new(async_input);
-    let open_therm_bus = AtsamdEdgeTriggerCapture::new(pb_09_ot_tx);
+    //  let mut open_therm_bus = AtsamdEdgeTriggerCapture::new(pb_09_ot_tx);
+    let example_vector = heapless::Vec::<bool, 13>::from_slice(&[true, true, false, true, false, true, false, false, true, false, false]).unwrap();
+    //  let _ = open_therm_bus.trigger(example_vector.into_iter(), Duration::from_millis(100));
 
     let time_driver = AtsamdTimeDriver::new();
-    let mut boiler_controller = BoilerControl::new(open_therm_bus, time_driver);
-    let _ = boiler_controller.set_point(Temperature::Celsius(16));
-    let _ = boiler_controller.enable_ch(CHState::Enable(true));
+    //  let mut boiler_controller = BoilerControl::new(open_therm_bus, time_driver);
+    //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
+    //  let _ = boiler_controller.enable_ch(CHState::Enable(true));
 
     let button: Pin<_, PullUpInterrupt> = pins.pd10.into();
     let mut extint = eic_channels.5.with_pin(button).into_future(Irqs);
