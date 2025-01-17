@@ -1292,7 +1292,7 @@ where
 /// Marker trait for valid SPI [`Config`]urations
 ///
 /// A functional SPI peripheral must have, at a minimum, an SCLK pad and
-/// either a Data In or a Data Out pad. Dependeing on the [`OpMode`], an SS
+/// either a Data In or a Data Out pad. Depending on the [`OpMode`], an SS
 /// pad may also be required.
 ///
 /// The `ValidConfig` trait is implemented only for valid combinations of
