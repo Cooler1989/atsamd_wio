@@ -23,8 +23,8 @@ use hal::{
     eic::{Eic, Sense},
     gpio::{Pin, PullUpInterrupt},
     pwm::{Pwm4, TC4Pinout},
+    pwm_wg::{PwmWg4},
     delay::Delay,
-    delay::*,
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 
@@ -133,14 +133,15 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut channel0 = channels.0.init(PriorityLevel::Lvl0);
     let channel1 = channels.1.init(PriorityLevel::Lvl0);
 
-    let mut source = [0xff; 100];
-    let mut dest = [0x0; 100];
+    let mut source = [0xffu8; 100];
+    let mut dest = [0x0u8; 100];
+
     channel0
         .transfer_future(
             &mut source,
             &mut dest,
-            TriggerSource::Disable,
-            TriggerAction::Block,
+            TriggerSource::Tc4Ovf,
+            TriggerAction::Burst,
         )
         .await
         .unwrap();
@@ -148,7 +149,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let pins = Pins::new(peripherals.port);
     let pwm_pin = pins.pb09.into_alternate::<E>();
 
-    let mut pwm4 = Pwm4::<PB09>::new(
+    let mut pwm4 = PwmWg4::<PB09>::new(
         &clocks.tc4_tc5(&gclk0).unwrap(),
         Hertz::from_raw(1000),
         peripherals.tc4,
@@ -172,6 +173,8 @@ async fn main(spawner: embassy_executor::Spawner) {
         .configure_gclk_divider_and_source(ClockGenId::Gclk2, 1, ClockSource::Osculp32k, false)
         .unwrap();
     clocks.configure_standby(ClockGenId::Gclk2, true);
+
+    //  let edge_trigger_capture_dev = AtsamdEdgeTriggerCapture::new();
 
     // Configure a clock for the EIC peripheral
     let gclk2 = clocks.get_gclk(ClockGenId::Gclk2).unwrap();
