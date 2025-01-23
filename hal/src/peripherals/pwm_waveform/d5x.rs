@@ -5,9 +5,47 @@ use atsamd_hal_macros::hal_cfg;
 use crate::clock;
 use crate::gpio::*;
 use crate::gpio::{AlternateE, AnyPin, Pin};
+use crate::dmac::{Beat, Buffer};
 use crate::pac::Mclk;
 use crate::time::Hertz;
 use crate::timer_params::TimerParams;
+
+#[derive(Clone)]
+pub struct PwmWaveformGeneratorPtr<T: Beat>(pub(in super::super) *mut T);
+
+unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
+    type Beat = T;
+
+    #[inline]
+    fn dma_ptr(&mut self) -> *mut Self::Beat {
+        self.0
+    }
+
+    #[inline]
+    fn incrementing(&self) -> bool {
+        false
+    }
+
+    #[inline]
+    fn buffer_len(&self) -> usize {
+        1
+    }
+}
+
+//  impl<P, M, Z, D, R, T> Spi<Config<P, M, Z>, D, R, T>
+//  where
+//      P: ValidPads,
+//      M: OpMode,
+//      Z: Size,
+//      Config<P, M, Z>: ValidConfig,
+//      D: Capability,
+//      Z::Word: Beat,
+//  {
+//      #[inline]
+//      pub(in super::super) fn sercom_ptr(&self) -> SercomPtr<Z::Word> {
+//          SercomPtr(self.config.regs.spi().data().as_ptr() as *mut _)
+//      }
+//  }
 
 // Timer/Counter (TCx)
 //
@@ -36,12 +74,17 @@ impl<I: PinId> $TYPE<I> {
         mclk: &mut Mclk,
     ) -> Self {
         let count = tc.count8();
+        let tc_ccbuf_dma_data_register_address = tc.count8().ccbuf(1).as_ptr() as *const ();
+        //  let PwmWaveformGeneratorPtr()(pub(in super::super) *mut T);
+        
+        //  write(|w| w.ccbuf().bits(duty as u8)); 
         let params = TimerParams::new(freq.convert(), clock.freq());
         mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
         count.ctrla().write(|w| w.swrst().set_bit());
         while count.ctrla().read().bits() & 1 != 0 {}
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
+        count.ctrla().modify(|_, w| w.copen1().set_bit());
         count.ctrla().modify(|_, w| {
             match params.divider {
                 1 => w.prescaler().div1(),
@@ -60,6 +103,9 @@ impl<I: PinId> $TYPE<I> {
         while count.syncbusy().read().cc0().bit_is_set() {}
         count.cc(1).write(|w| unsafe { w.cc().bits(0) });
         while count.syncbusy().read().cc1().bit_is_set() {}
+
+        //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
+        //  of the timer. 
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
 
@@ -68,6 +114,10 @@ impl<I: PinId> $TYPE<I> {
             tc,
             pinout,
         }
+    }
+
+    pub fn get_dma_ptr(&self) -> PwmWaveformGeneratorPtr<u8> {
+        PwmWaveformGeneratorPtr(self.tc.count8().ccbuf(1).as_ptr() as *mut _)
     }
 
     pub fn get_period(&self) -> Hertz {
