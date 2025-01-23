@@ -64,6 +64,8 @@ usbd-serial = "0.1"
 embedded-graphics = "0.7.1"
 panic-probe = "0.3"
 panic-halt = "0.2"
+panic-semihosting = "0.5"
+cortex-m-semihosting = "0.3"
 oorandom = "11.1.3"
 nom = { version = "^6.0", default-features = false }
 
@@ -79,6 +81,7 @@ wifi = ["bbqueue", "generic-array", "seeed-erpc"]
 dma = ["atsamd-hal/dma"]
 # Enable async support from atsamd-hal
 async = ["atsamd-hal/async"]
+use_semihosting = []
 
 [[example]]
 name = "blinky"

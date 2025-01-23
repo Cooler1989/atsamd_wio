@@ -19,6 +19,7 @@ use wio_terminal::prelude::_embedded_hal_PwmPin;
 use hal::{
     clock::{ClockGenId, ClockSource, GenericClockController},
     dmac::{DmaController, PriorityLevel, TriggerAction, TriggerSource},
+    dmac::{Buffer, Beat},
     ehal::digital::StatefulOutputPin,
     eic::{Eic, Sense},
     gpio::{Pin, PullUpInterrupt},
@@ -42,6 +43,11 @@ use boiler::opentherm_interface::{
 };
 use boiler::{TimeBaseRef, Instant, BoilerControl};
 
+#[cfg(feature = "use_semihosting")]
+use panic_semihosting as _;
+
+use cortex_m_semihosting::hprintln;
+
 atsamd_hal::bind_interrupts!(struct Irqs {
     EIC_EXTINT_5 => atsamd_hal::eic::InterruptHandler;
 });
@@ -49,6 +55,28 @@ atsamd_hal::bind_interrupts!(struct Irqs {
 atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
     DMAC: [DMAC_0, DMAC_1, DMAC_2, DMAC_OTHER] => atsamd_hal::dmac::InterruptHandler;
 });
+
+//  #[derive(Clone)]
+//  pub(crate) struct PwmWaveformGeneratorPtr<T: Beat>(pub *mut T);
+//  
+//  unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
+//      type Beat = T;
+//  
+//      #[inline]
+//      fn dma_ptr(&mut self) -> *mut Self::Beat {
+//          self.0
+//      }
+//  
+//      #[inline]
+//      fn incrementing(&self) -> bool {
+//          false
+//      }
+//  
+//      #[inline]
+//      fn buffer_len(&self) -> usize {
+//          1
+//      }
+//  }
 
 #[embassy_executor::task]
 async fn boiler_task()
@@ -133,25 +161,12 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut channel0 = channels.0.init(PriorityLevel::Lvl0);
     let channel1 = channels.1.init(PriorityLevel::Lvl0);
 
-    let mut source = [0xffu8; 100];
-    let mut dest = [0x0u8; 100];
-
-    channel0
-        .transfer_future(
-            &mut source,
-            &mut dest,
-            TriggerSource::Tc4Ovf,
-            TriggerAction::Burst,
-        )
-        .await
-        .unwrap();
-
     let pins = Pins::new(peripherals.port);
     let pwm_pin = pins.pb09.into_alternate::<E>();
 
     let mut pwm4 = PwmWg4::<PB09>::new(
         &clocks.tc4_tc5(&gclk0).unwrap(),
-        Hertz::from_raw(1000),
+        Hertz::from_raw(8),
         peripherals.tc4,
         TC4Pinout::Pb9(pwm_pin),
         &mut peripherals.mclk,
@@ -159,11 +174,41 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let max_duty = pwm4.get_max_duty();
 
+    //  DMA setup:
+    let mut source = [0xffu8; 1000];
+    for (index, value) in source.iter_mut().enumerate() {
+        *value = index as u8;
+    }
+
+    let dmac_for_cnt = unsafe { crate::pac::Peripherals::steal().dmac };
+        //  self.regs.chctrla.modify(|_, w| w.swrst().set_bit());
+        //  .chctrla.read().swrst().bit_is_set() {}
+        //  while self.regs.chctrla.read().swrst().bit_is_set() {}
+
     loop {
         pwm4.set_duty(max_duty / 2);
-        delay.delay_ms(2000u16);
-        pwm4.set_duty(max_duty / 8);
-        delay.delay_ms(2000u16);
+        let pwm_dma_address = pwm4.get_dma_ptr();
+        let future = channel0
+            .transfer_future(
+                &mut source,
+                pwm_dma_address,
+                TriggerSource::Tc4Ovf,
+                TriggerAction::Burst,
+            );
+            //  .await
+            //  .unwrap();
+        /* Now, how to poll the future manually? */
+        let _result = future.poll();
+
+        //  hprintln!{"{}", }.ok();
+        //  pwm4.set_duty(max_duty / 2);
+        loop {
+            let dma_status = dmac_for_cnt.active().read().bits();
+            hprintln!("{}", dma_status).ok();
+        }
+        delay.delay_ms(10000u16);
+        //  pwm4.set_duty(max_duty / 8);
+        //  delay.delay_ms(2000u16);
     }
 
     //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
