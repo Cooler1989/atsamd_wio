@@ -1,16 +1,16 @@
 #![no_std]
 #![no_main]
 
-use defmt_rtt as _;
-use panic_probe as _;
-use heapless::Vec;
-use core::time::Duration;
 use bsp::hal::time::Hertz;
+use core::time::Duration;
+use defmt_rtt as _;
+use heapless::Vec;
+use panic_probe as _;
 
 use bsp::pac;
 use bsp::{
-    hal, 
-    hal::gpio::{Pins, Output, PushPullOutput, PushPull, OutputConfig},
+    hal,
+    hal::gpio::{Output, OutputConfig, Pins, PushPull, PushPullOutput},
     hal::gpio::{E, PB09},
     pin_alias,
 };
@@ -18,30 +18,32 @@ use wio_terminal::prelude::_embedded_hal_PwmPin;
 
 use hal::{
     clock::{ClockGenId, ClockSource, GenericClockController},
+    delay::Delay,
+    dmac::{Beat, Buffer},
     dmac::{DmaController, PriorityLevel, TriggerAction, TriggerSource},
-    dmac::{Buffer, Beat},
     ehal::digital::StatefulOutputPin,
     eic::{Eic, Sense},
-    gpio::{Pin, PullUpInterrupt},
+    gpio::{Pin as GpioPin, PullUpInterrupt},
     pwm::{Pwm4, TC4Pinout},
-    pwm_wg::{PwmWg4},
-    delay::Delay,
+    pwm_wg::PwmWg4,
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 
 use bsp::pins::UserLed;
 use wio_terminal as bsp;
 
-use opentherm_boiler_controller_lib as boiler;
-use boiler::opentherm_interface::{
-    Temperature, CHState,
-    OpenThermEdgeTriggerBus,
-    edge_trigger_capture_interface::{
-        CaptureError, EdgeCaptureInterface, EdgeTriggerInterface, TriggerError,
-        InitLevel, 
-    }
-};
-use boiler::{TimeBaseRef, Instant, BoilerControl};
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+
+//  use boiler::{BoilerControl, Instant, TimeBaseRef};
+//  use opentherm_boiler_controller_lib as boiler;
+//  use boiler::opentherm_interface::{
+//      edge_trigger_capture_interface::{
+//          CaptureError, EdgeCaptureInterface, EdgeTriggerInterface, InitLevel, TriggerError,
+//      },
+//      CHState, OpenThermEdgeTriggerBus, Temperature,
+//  };
 
 #[cfg(feature = "use_semihosting")]
 use panic_semihosting as _;
@@ -58,79 +60,77 @@ atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
 
 //  #[derive(Clone)]
 //  pub(crate) struct PwmWaveformGeneratorPtr<T: Beat>(pub *mut T);
-//  
+//
 //  unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
 //      type Beat = T;
-//  
+//
 //      #[inline]
 //      fn dma_ptr(&mut self) -> *mut Self::Beat {
 //          self.0
 //      }
-//  
+//
 //      #[inline]
 //      fn incrementing(&self) -> bool {
 //          false
 //      }
-//  
+//
 //      #[inline]
 //      fn buffer_len(&self) -> usize {
 //          1
 //      }
 //  }
 
-#[embassy_executor::task]
-async fn boiler_task()
-{
-}
+#[cfg(feature = "use_opentherm")]
+mod boiler_implementation {
 
-const VEC_SIZE_CAPTURE: usize = 128;
-struct AtsamdEdgeTriggerCapture<const N: usize = VEC_SIZE_CAPTURE> {
-    output_pin: Pin<PB09, PushPullOutput>,
-}
+    #[embassy_executor::task]
+    async fn boiler_task() {}
 
-impl AtsamdEdgeTriggerCapture {
-    pub fn new(pin_tx: Pin<PB09,PushPullOutput>) -> Self
-    {
-        Self{output_pin:pin_tx}
+    const VEC_SIZE_CAPTURE: usize = 128;
+    struct AtsamdEdgeTriggerCapture<const N: usize = VEC_SIZE_CAPTURE> {
+        output_pin: GpioPin<PB09, PushPullOutput>,
     }
-}
 
-impl EdgeTriggerInterface for AtsamdEdgeTriggerCapture {
-    async fn trigger(
-        &mut self,
-        iterator: impl Iterator<Item = bool>,
-        period: core::time::Duration,
-    ) -> Result<(), TriggerError> {
+    impl AtsamdEdgeTriggerCapture {
+        pub fn new(pin_tx: GpioPin<PB09, PushPullOutput>) -> Self {
+            Self { output_pin: pin_tx }
+        }
+    }
+
+    impl EdgeTriggerInterface for AtsamdEdgeTriggerCapture {
+        async fn trigger(
+            &mut self,
+            iterator: impl Iterator<Item = bool>,
+            period: core::time::Duration,
+        ) -> Result<(), TriggerError> {
             todo!()
+        }
     }
-}
 
-impl<const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<N> {
-    async fn start_capture(
-        &mut self,
-        timeout_inactive_capture: core::time::Duration,
-        timeout_till_active_capture: core::time::Duration,
-    ) -> Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError> {
-        todo!()
+    impl<const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<N> {
+        async fn start_capture(
+            &mut self,
+            timeout_inactive_capture: core::time::Duration,
+            timeout_till_active_capture: core::time::Duration,
+        ) -> Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError> {
+            todo!()
+        }
     }
-}
 
-impl OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture { }
+    struct AtsamdTimeDriver {}
 
-struct AtsamdTimeDriver {
-}
-
-impl AtsamdTimeDriver {
-    fn new() -> Self {
-        Self{}
+    impl AtsamdTimeDriver {
+        fn new() -> Self {
+            Self {}
+        }
     }
-}
 
-impl TimeBaseRef for AtsamdTimeDriver {
-    fn now(&self) -> Instant
-    {
-        todo!()
+    impl TimeBaseRef for AtsamdTimeDriver {
+        fn now(&self) -> Instant {
+            todo!()
+        }
     }
+    impl OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture {}
 }
 
 #[embassy_executor::main]
@@ -139,6 +139,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let core = pac::CorePeripherals::take().unwrap();
     //  let core = CorePeripherals::take().unwrap();
 
+    #[cfg(feature = "use_opentherm")]
     spawner.spawn(boiler_task()).unwrap();
 
     let mut clocks = GenericClockController::with_external_32kosc(
@@ -181,24 +182,45 @@ async fn main(spawner: embassy_executor::Spawner) {
     }
 
     let dmac_for_cnt = unsafe { crate::pac::Peripherals::steal().dmac };
-        //  self.regs.chctrla.modify(|_, w| w.swrst().set_bit());
-        //  .chctrla.read().swrst().bit_is_set() {}
-        //  while self.regs.chctrla.read().swrst().bit_is_set() {}
+    //  self.regs.chctrla.modify(|_, w| w.swrst().set_bit());
+    //  .chctrla.read().swrst().bit_is_set() {}
+    //  while self.regs.chctrla.read().swrst().bit_is_set() {}
 
     loop {
         pwm4.set_duty(max_duty / 2);
         let pwm_dma_address = pwm4.get_dma_ptr();
-        let future = channel0
-            .transfer_future(
-                &mut source,
-                pwm_dma_address,
-                TriggerSource::Tc4Ovf,
-                TriggerAction::Burst,
-            );
-            //  .await
-            //  .unwrap();
+        let dma_future = channel0.transfer_future(
+            &mut source,
+            pwm_dma_address,
+            TriggerSource::Tc4Ovf,
+            TriggerAction::Burst,
+        );
+        //  .await
+        //  .unwrap();
         /* Now, how to poll the future manually? */
-        let _result = future.poll();
+        //  let _result = future.poll();
+
+        // Waker is just a simple stub in this example.
+        let waker = unsafe {
+            core::task::Waker::from_raw(core::task::RawWaker::new(
+                core::ptr::null(),
+                &RAW_WAKER_VTABLE,
+            ))
+        };
+
+        // Pin the future to prevent it from being moved
+        //  let future_pin: Pin<&mut MyFuture> = unsafe { Pin::new_unchecked(&mut FUTURE) };
+
+        let mut cx = Context::from_waker(&waker);
+        // Poll the future manually in the `no_std` environment
+        let mut dma_future_pin = core::pin::pin!(dma_future);
+        //  , &waker);
+        loop {
+            let result = match dma_future_pin.as_mut().poll(&mut cx) {
+                Poll::Pending => unsafe { core::hint::unreachable_unchecked() },
+                Poll::Ready(output) => output,
+            };
+        }
 
         //  hprintln!{"{}", }.ok();
         //  pwm4.set_duty(max_duty / 2);
@@ -227,19 +249,23 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let eic_channels = Eic::new(&mut peripherals.mclk, eic_clock, peripherals.eic).split();
 
-    let _ot_rx: Pin<_, PullUpInterrupt> = pins.pb08.into(); // D0
-    //  let pb_09_ot_tx: Pin<_, PushPullOutput> = pins.pb09.into(); // D1
-    //  let capture_device = RpEdgeCapture::new(async_input);
-    //  let mut open_therm_bus = AtsamdEdgeTriggerCapture::new(pb_09_ot_tx);
-    let example_vector = heapless::Vec::<bool, 13>::from_slice(&[true, true, false, true, false, true, false, false, true, false, false]).unwrap();
+    let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
+                                                                //  let pb_09_ot_tx: GpioPin<_, PushPullOutput> = pins.pb09.into(); // D1
+                                                                //  let capture_device = RpEdgeCapture::new(async_input);
+                                                                //  let mut open_therm_bus = AtsamdEdgeTriggerCapture::new(pb_09_ot_tx);
+    let example_vector = heapless::Vec::<bool, 13>::from_slice(&[
+        true, true, false, true, false, true, false, false, true, false, false,
+    ])
+    .unwrap();
     //  let _ = open_therm_bus.trigger(example_vector.into_iter(), Duration::from_millis(100));
 
+    #[cfg(feature = "use_opentherm")]
     let time_driver = AtsamdTimeDriver::new();
     //  let mut boiler_controller = BoilerControl::new(open_therm_bus, time_driver);
     //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
     //  let _ = boiler_controller.enable_ch(CHState::Enable(true));
 
-    let button: Pin<_, PullUpInterrupt> = pins.pd10.into();
+    let button: GpioPin<_, PullUpInterrupt> = pins.pd10.into();
     let mut extint = eic_channels.5.with_pin(button).into_future(Irqs);
     extint.enable_interrupt();
 
@@ -249,4 +275,16 @@ async fn main(spawner: embassy_executor::Spawner) {
         defmt::info!("Falling edge detected");
         user_led.toggle().unwrap();
     }
+}
+
+// Dummy Waker implementation for no_std environment.
+static RAW_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
+    |ptr: *const ()| RawWaker::new(ptr, &RAW_WAKER_VTABLE),
+    |_: *const ()| {}, // Do nothing, for simulation
+    |_: *const ()| {}, // Do nothing, for simulation
+    |_: *const ()| {},
+);
+
+unsafe fn raw_waker(waker_ptr: *const ()) -> Waker {
+    Waker::from_raw(RawWaker::new(waker_ptr, &RAW_WAKER_VTABLE))
 }
