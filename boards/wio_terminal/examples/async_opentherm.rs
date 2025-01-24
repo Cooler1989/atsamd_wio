@@ -215,12 +215,19 @@ async fn main(spawner: embassy_executor::Spawner) {
         // Poll the future manually in the `no_std` environment
         let mut dma_future_pin = core::pin::pin!(dma_future);
         //  , &waker);
-        loop {
-            let result = match dma_future_pin.as_mut().poll(&mut cx) {
-                Poll::Pending => unsafe { core::hint::unreachable_unchecked() },
-                Poll::Ready(output) => output,
-            };
-        }
+
+        // Manually calling poll shall trigger the DMA transfer:
+        let result = match dma_future_pin.as_mut().poll(&mut cx) {
+            Poll::Pending => unsafe {
+                //  core::hint::unreachable_unchecked()
+                hprintln!("Pending").ok();
+                Ok(())
+            },
+            Poll::Ready(output) => {
+                hprintln!("Ready").ok();
+                output
+            }
+        };
 
         //  hprintln!{"{}", }.ok();
         //  pwm4.set_duty(max_duty / 2);
