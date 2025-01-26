@@ -166,25 +166,37 @@ async fn main(spawner: embassy_executor::Spawner) {
     let pwm_pin = pins.pb09.into_alternate::<E>();
 
     let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
-    hprintln!("TC4.per:0x{:08X}", tc4_readonly.count8().perbuf().read().bits()).ok();
-
-
-    //  DMA setup:
-    let mut source = [0x7fu8; 16];
-    for (index, value) in source.iter_mut().enumerate() {
-        *value = index as u8;
-    }
+    hprintln!(
+        "TC4.per:0x{:08X}",
+        tc4_readonly.count8().perbuf().read().bits()
+    )
+    .ok();
 
     let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
     //  self.regs.chctrla.modify(|_, w| w.swrst().set_bit());
     //  .chctrla.read().swrst().bit_is_set() {}
     //  while self.regs.chctrla.read().swrst().bit_is_set() {}
 
+    let mut tc4_timer = peripherals.tc4;
+
+    let mut pwm4 = PwmWg4::<PB09>::new_waveform_generator(
+        &clocks.tc4_tc5(&gclk0).unwrap(),
+        Hertz::from_raw(32),
+        tc4_timer,
+        TC4Pinout::Pb9(pwm_pin),
+        &mut peripherals.mclk,
+    );
+
     loop {
-        //  let pwm_dma_address = pwm4.get_dma_ptr();
-        let pwm_dma_address = PwmWg4::<PB09>::GetDmaPtr(
-            unsafe { crate::pac::Peripherals::steal().tc4 }
-        );
+        //  DMA setup:
+        let mut source = [0x7fu8; 16];
+        for (index, value) in source.iter_mut().enumerate() {
+            *value = index as u8;
+        }
+
+        //  let pwm_dma_address =
+        //      PwmWg4::<PB09>::GetDmaPtr(unsafe { crate::pac::Peripherals::steal().tc4 });
+        let pwm_dma_address = pwm4.get_dma_ptr();
         let dma_future = channel0.transfer_future(
             &mut source,
             pwm_dma_address,
@@ -195,16 +207,6 @@ async fn main(spawner: embassy_executor::Spawner) {
         //  .unwrap();
         /* Now, how to poll the future manually? */
         //  let _result = future.poll();
-
-        let mut pwm4 = PwmWg4::<PB09>::new(
-            &clocks.tc4_tc5(&gclk0).unwrap(),
-            Hertz::from_raw(32),
-            peripherals.tc4,
-            TC4Pinout::Pb9(pwm_pin),
-            &mut peripherals.mclk,
-        );
-        let max_duty = pwm4.get_max_duty();
-        pwm4.set_duty(max_duty / 2);
 
         // Waker is just a simple stub in this example.
         let waker = unsafe {
@@ -222,6 +224,9 @@ async fn main(spawner: embassy_executor::Spawner) {
         let mut dma_future_pin = core::pin::pin!(dma_future);
         //  , &waker);
 
+        pwm4.start();
+        let max_duty = pwm4.get_max_duty();
+        pwm4.set_duty(max_duty / 2);
         // Manually calling poll shall trigger the DMA transfer:
         let result = match dma_future_pin.as_mut().poll(&mut cx) {
             Poll::Pending => unsafe {
@@ -229,7 +234,11 @@ async fn main(spawner: embassy_executor::Spawner) {
                 hprintln!("Pending").ok();
             },
             Poll::Ready(output) => {
-                hprintln!("Ready, DMA CH[0].status 0x{:08X}", dmac_readonly.channel(0).chstatus().read().bits()).ok();
+                hprintln!(
+                    "Ready, DMA CH[0].status 0x{:08X}",
+                    dmac_readonly.channel(0).chstatus().read().bits()
+                )
+                .ok();
                 continue;
             }
         };
@@ -238,27 +247,53 @@ async fn main(spawner: embassy_executor::Spawner) {
         hprintln!("DMA BASEADDR: 0x{:08X}", dma_status).ok();
         let dma_status = dmac_readonly.channel(0).chctrla().read().bits();
         hprintln!("DMA CH[0].chctrla 0x{:08X}", dma_status).ok();
-        hprintln!("DMA CH[0].chctrlb 0x{:08X}", dmac_readonly.channel(0).chctrlb().read().bits()).ok();
-        hprintln!("DMA CH[0].intflag 0x{:08X}", dmac_readonly.channel(0).chintflag().read().bits()).ok();
-        hprintln!("DMA CH[0].status 0x{:08X}", dmac_readonly.channel(0).chstatus().read().bits()).ok();
+        hprintln!(
+            "DMA CH[0].chctrlb 0x{:08X}",
+            dmac_readonly.channel(0).chctrlb().read().bits()
+        )
+        .ok();
+        hprintln!(
+            "DMA CH[0].intflag 0x{:08X}",
+            dmac_readonly.channel(0).chintflag().read().bits()
+        )
+        .ok();
+        hprintln!(
+            "DMA CH[0].status 0x{:08X}",
+            dmac_readonly.channel(0).chstatus().read().bits()
+        )
+        .ok();
         // hprintln!("DMA CH[0].wave 0x{:08X}", dmac_readonly.channel(0).chwave().read().bits()).ok();
         //  hprintln!{"{}", }.ok();
         //  pwm4.set_duty(max_duty / 2);
-        hprintln!("TC4.per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
-        hprintln!("TC4.perbuf:0x{:08X}", tc4_readonly.count8().perbuf().read().bits()).ok();
-        hprintln!("TC4.ctrla:0x{:08X}", tc4_readonly.count8().ctrla().read().bits()).ok();
+        hprintln!(
+            "TC4.per:0x{:08X}",
+            tc4_readonly.count8().per().read().bits()
+        )
+        .ok();
+        hprintln!(
+            "TC4.perbuf:0x{:08X}",
+            tc4_readonly.count8().perbuf().read().bits()
+        )
+        .ok();
+        hprintln!(
+            "TC4.ctrla:0x{:08X}",
+            tc4_readonly.count8().ctrla().read().bits()
+        )
+        .ok();
 
         loop {
             let dma_status = dmac_readonly.active().read().bits();
             let tc4_cc0_val = tc4_readonly.count8().cc(0).read().bits();
             let tc4_cc_val = tc4_readonly.count8().cc(1).read().bits();
-            let _ = tc4_readonly.count8().ctrlbset().write(|w| {
-                w.cmd().readsync()
-            });
+            let _ = tc4_readonly
+                .count8()
+                .ctrlbset()
+                .write(|w| w.cmd().readsync());
             let cnt_value = tc4_readonly.count8().count().read().bits();
-            let _ = tc4_readonly.count8().ctrlbset().write(|w| {
-                w.cmd().readsync()
-            });
+            let _ = tc4_readonly
+                .count8()
+                .ctrlbset()
+                .write(|w| w.cmd().readsync());
             let cnt2_value = tc4_readonly.count8().count().read().bits();
 
             hprintln!("act:0x{:08X}", dma_status).ok();
@@ -277,7 +312,11 @@ async fn main(spawner: embassy_executor::Spawner) {
                 Ok(())
             },
             Poll::Ready(output) => {
-                hprintln!("Ready, DMA CH[0].status 0x{:08X}", dmac_readonly.channel(0).chstatus().read().bits()).ok();
+                hprintln!(
+                    "Ready, DMA CH[0].status 0x{:08X}",
+                    dmac_readonly.channel(0).chstatus().read().bits()
+                )
+                .ok();
                 output
             }
         };
