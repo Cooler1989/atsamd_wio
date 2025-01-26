@@ -3,12 +3,17 @@
 use atsamd_hal_macros::hal_cfg;
 
 use crate::clock;
-use crate::dmac::{Beat, Buffer};
+#[cfg(feature = "async")]
+use crate::dmac::ReadyFuture;
+use crate::dmac::{AnyChannel, Beat, Buffer, TriggerSource, TriggerAction, Error as DmacError};
 use crate::gpio::*;
 use crate::gpio::{AlternateE, AnyPin, Pin};
 use crate::pac::Mclk;
 use crate::time::Hertz;
 use crate::timer_params::TimerParams;
+use crate::typelevel::{Is, NoneT, Sealed};
+
+use paste::paste;
 
 #[derive(Clone)]
 pub struct PwmWaveformGeneratorPtr<T: Beat>(pub(in super::super) *mut T);
@@ -63,6 +68,31 @@ pub struct $TYPE<I: PinId> {
     tc: crate::pac::$TC,
     #[allow(dead_code)]
     pinout: $pinout<I>,
+    //  _channel: Option<DmaCh>,
+}
+
+paste!{
+pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
+    base_pwm: $TYPE<I>,
+    _channel: DmaCh
+}
+
+impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
+    pub async fn start(&mut self, generation_pattern: &mut [u8]) -> Result<(),DmacError> {
+        let pwm_dma_address = self.base_pwm.get_dma_ptr();
+        let dma_future = self._channel.as_mut().transfer_future(
+            generation_pattern,
+            pwm_dma_address,
+            TriggerSource::Tc4Ovf,
+            TriggerAction::Burst,
+        );
+        //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
+        //  of the timer.
+        let count = self.base_pwm.tc.count8();
+        count.ctrla().modify(|_, w| w.enable().set_bit());
+        while count.syncbusy().read().enable().bit_is_set() {}
+        dma_future.await
+    }
 }
 
 impl<I: PinId> $TYPE<I> {
@@ -118,13 +148,23 @@ impl<I: PinId> $TYPE<I> {
         }
     }
 
+    //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
+    pub fn with_dma_channel<CH>(mut self, channel: CH ) -> [<$TYPE Future>]<I, CH>
+        where
+        CH: AnyChannel<Status=ReadyFuture> 
+    {
+        [<$TYPE Future>] {
+            base_pwm: self,
+            _channel: channel,
+        }
+    }
+
     pub fn start(&mut self) {
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
         //  of the timer.
         let count = self.tc.count8();
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
-
     }
 
     pub fn GetDmaPtr(tc: crate::pac::$TC) -> PwmWaveformGeneratorPtr<u8> {
@@ -166,6 +206,7 @@ impl<I: PinId> $TYPE<I> {
         count.cc(0).write(|w| unsafe { w.cc().bits(params.cycles as u8) });
         while count.syncbusy().read().cc0().bit_is_set() {}
     }
+}
 }
 
 impl<I: PinId> $crate::ehal::pwm::ErrorType for$TYPE<I> {

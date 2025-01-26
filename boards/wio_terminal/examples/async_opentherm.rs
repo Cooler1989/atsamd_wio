@@ -160,7 +160,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let channels = dmac.split();
     // Initialize DMA Channels 0 and 1
     let mut channel0 = channels.0.init(PriorityLevel::Lvl0);
-    let _channel1 = channels.1.init(PriorityLevel::Lvl0);
+    let channel1 = channels.1.init(PriorityLevel::Lvl0);
 
     let pins = Pins::new(peripherals.port);
     let pwm_pin = pins.pb09.into_alternate::<E>();
@@ -185,7 +185,9 @@ async fn main(spawner: embassy_executor::Spawner) {
         tc4_timer,
         TC4Pinout::Pb9(pwm_pin),
         &mut peripherals.mclk,
-    );
+    )
+    .with_dma_channel(channel0); // TODO: Channel shall be changed to channel0 later on. Thiw is
+                                 // just for prototyping
 
     loop {
         //  DMA setup:
@@ -196,17 +198,19 @@ async fn main(spawner: embassy_executor::Spawner) {
 
         //  let pwm_dma_address =
         //      PwmWg4::<PB09>::GetDmaPtr(unsafe { crate::pac::Peripherals::steal().tc4 });
-        let pwm_dma_address = pwm4.get_dma_ptr();
-        let dma_future = channel0.transfer_future(
-            &mut source,
-            pwm_dma_address,
-            TriggerSource::Tc4Ovf,
-            TriggerAction::Burst,
-        );
+        //  let pwm_dma_address = pwm4.get_dma_ptr();
+        //  let dma_future = channel0.transfer_future(
+        //      &mut source,
+        //      pwm_dma_address,
+        //      TriggerSource::Tc4Ovf,
+        //      TriggerAction::Burst,
+        //  );
         //  .await
         //  .unwrap();
         /* Now, how to poll the future manually? */
         //  let _result = future.poll();
+
+        let dma_future = pwm4.start(&mut source);
 
         // Waker is just a simple stub in this example.
         let waker = unsafe {
@@ -224,9 +228,8 @@ async fn main(spawner: embassy_executor::Spawner) {
         let mut dma_future_pin = core::pin::pin!(dma_future);
         //  , &waker);
 
-        pwm4.start();
-        let max_duty = pwm4.get_max_duty();
-        pwm4.set_duty(max_duty / 2);
+        //  let max_duty = pwm4.get_max_duty();
+        //  pwm4.set_duty(max_duty / 2);
         // Manually calling poll shall trigger the DMA transfer:
         let result = match dma_future_pin.as_mut().poll(&mut cx) {
             Poll::Pending => unsafe {
