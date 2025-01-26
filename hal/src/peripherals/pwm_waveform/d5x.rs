@@ -3,9 +3,9 @@
 use atsamd_hal_macros::hal_cfg;
 
 use crate::clock;
+use crate::dmac::{Beat, Buffer};
 use crate::gpio::*;
 use crate::gpio::{AlternateE, AnyPin, Pin};
-use crate::dmac::{Beat, Buffer};
 use crate::pac::Mclk;
 use crate::time::Hertz;
 use crate::timer_params::TimerParams;
@@ -66,7 +66,7 @@ pub struct $TYPE<I: PinId> {
 }
 
 impl<I: PinId> $TYPE<I> {
-    pub fn new(
+    pub fn new_waveform_generator(
         clock: &clock::$clock,
         freq: Hertz,
         tc: crate::pac::$TC,
@@ -76,8 +76,8 @@ impl<I: PinId> $TYPE<I> {
         let count = tc.count8();
         let tc_ccbuf_dma_data_register_address = tc.count8().ccbuf(1).as_ptr() as *const ();
         //  let PwmWaveformGeneratorPtr()(pub(in super::super) *mut T);
-        
-        //  write(|w| w.ccbuf().bits(duty as u8)); 
+
+        //  write(|w| w.ccbuf().bits(duty as u8));
         let params = TimerParams::new(freq.convert(), clock.freq());
         mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
         count.ctrla().write(|w| w.swrst().set_bit());
@@ -111,16 +111,20 @@ impl<I: PinId> $TYPE<I> {
         count.cc(1).write(|w| unsafe { w.cc().bits(0) });
         while count.syncbusy().read().cc1().bit_is_set() {}
 
-        //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
-        //  of the timer. 
-        count.ctrla().modify(|_, w| w.enable().set_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
-
         Self {
             clock_freq: clock.freq(),
             tc,
             pinout,
         }
+    }
+
+    pub fn start(&mut self) {
+        //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
+        //  of the timer.
+        let count = self.tc.count8();
+        count.ctrla().modify(|_, w| w.enable().set_bit());
+        while count.syncbusy().read().enable().bit_is_set() {}
+
     }
 
     pub fn GetDmaPtr(tc: crate::pac::$TC) -> PwmWaveformGeneratorPtr<u8> {
