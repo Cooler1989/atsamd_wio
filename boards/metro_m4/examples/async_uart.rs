@@ -85,9 +85,9 @@ async fn main(spawner: embassy_executor::Spawner) {
 }
 
 #[embassy_executor::task]
-async fn send_bytes(mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>) {
+async fn send_bytes(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/) {
     loop {
-        uart_tx.write(b"Hello, world!").await.unwrap();
+        //  uart_tx.write(b"Hello, world!").await.unwrap();
         defmt::info!("Sent 10 bytes");
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
     }

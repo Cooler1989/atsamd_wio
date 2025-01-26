@@ -2,6 +2,8 @@
 #![no_main]
 
 use bsp::hal::time::Hertz;
+use hal::fugit::Hertz as FugitHertz;
+use hal::fugit::MillisDuration;
 use core::time::Duration;
 use defmt_rtt as _;
 use heapless::Vec;
@@ -35,6 +37,9 @@ use wio_terminal as bsp;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use rtic_monotonics::Monotonic;
+
+rtic_monotonics::systick_monotonic!(Mono, 10000);
 
 //  use boiler::{BoilerControl, Instant, TimeBaseRef};
 //  use opentherm_boiler_controller_lib as boiler;
@@ -133,6 +138,27 @@ mod boiler_implementation {
     impl OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture {}
 }
 
+#[embassy_executor::task]
+async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/) {
+    loop {
+        //  uart_tx.write(b"Hello, world!").await.unwrap();
+        //  defmt::info!("Sent 10 bytes");
+
+        //  let mut delay = Delay::new(core.SYST, &mut clocks);
+        let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+        let _ = tc4_readonly
+            .count8()
+            .ctrlbset()
+            .write(|w| w.cmd().readsync());
+        let cnt_value = tc4_readonly.count8().count().read().bits();
+
+        hprintln!("cnt:0x{:08X}", cnt_value).ok();
+
+        //  delay.delay_ms(200u16);
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
     let mut peripherals = pac::Peripherals::take().unwrap();
@@ -150,7 +176,9 @@ async fn main(spawner: embassy_executor::Spawner) {
         &mut peripherals.nvmctrl,
     );
     let gclk0 = clocks.gclk0();
-    let mut delay = Delay::new(core.SYST, &mut clocks);
+    //  let mut delay = Delay::new(core.SYST, &mut clocks);
+    let freq: FugitHertz<u32> = clocks.gclk0().into();
+    Mono::start(core.SYST, freq.to_Hz());
 
     // Initialize DMA Controller
     let dmac = DmaController::init(peripherals.dmac, &mut peripherals.pm);
@@ -188,6 +216,8 @@ async fn main(spawner: embassy_executor::Spawner) {
     )
     .with_dma_channel(channel0); // TODO: Channel shall be changed to channel0 later on. Thiw is
                                  // just for prototyping
+
+    spawner.spawn(print_timer_state_task()).unwrap();
 
     loop {
         //  DMA setup:
@@ -324,7 +354,8 @@ async fn main(spawner: embassy_executor::Spawner) {
             }
         };
 
-        delay.delay_ms(5000u16);
+        //  delay.delay_ms(5000u16);
+        Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
         //  pwm4.set_duty(max_duty / 8);
         //  delay.delay_ms(2000u16);
     }
