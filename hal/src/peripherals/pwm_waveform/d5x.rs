@@ -85,20 +85,27 @@ impl<I: PinId> $TYPE<I> {
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
         count.ctrla().modify(|_, w| w.copen1().set_bit());
+        count.ctrla().modify(|_, w| w.mode().count8());
         count.ctrla().modify(|_, w| {
-            match params.divider {
-                1 => w.prescaler().div1(),
-                2 => w.prescaler().div2(),
-                4 => w.prescaler().div4(),
-                8 => w.prescaler().div8(),
-                16 => w.prescaler().div16(),
-                64 => w.prescaler().div64(),
-                256 => w.prescaler().div256(),
-                1024 => w.prescaler().div1024(),
-                _ => unreachable!(),
-            }
+            w.prescaler().div1024()
+            //  match params.divider {
+            //      1 => w.prescaler().div1(),
+            //      2 => w.prescaler().div2(),
+            //      4 => w.prescaler().div4(),
+            //      8 => w.prescaler().div8(),
+            //      16 => w.prescaler().div16(),
+            //      64 => w.prescaler().div64(),
+            //      256 => w.prescaler().div256(),
+            //      1024 => w.prescaler().div1024(),
+            //      _ => unreachable!(),
+            //  }
         });
-        count.wave().write(|w| w.wavegen().mpwm());
+        //  count.ctrla().write(|w| w.count8());
+
+        count.per().write(|w| unsafe { w.per().bits(0xffu8) });
+        count.perbuf().write(|w| unsafe { w.perbuf().bits(0xffu8) });
+        //  while count.syncbusy().read().per().bit_is_set() {}
+
         count.cc(0).write(|w| unsafe { w.cc().bits(params.cycles as u8) });
         while count.syncbusy().read().cc0().bit_is_set() {}
         count.cc(1).write(|w| unsafe { w.cc().bits(0) });
@@ -116,6 +123,9 @@ impl<I: PinId> $TYPE<I> {
         }
     }
 
+    pub fn GetDmaPtr(tc: crate::pac::$TC) -> PwmWaveformGeneratorPtr<u8> {
+        PwmWaveformGeneratorPtr(tc.count8().ccbuf(1).as_ptr() as *mut _)
+    }
     pub fn get_dma_ptr(&self) -> PwmWaveformGeneratorPtr<u8> {
         PwmWaveformGeneratorPtr(self.tc.count8().ccbuf(1).as_ptr() as *mut _)
     }
