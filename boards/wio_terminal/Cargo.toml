@@ -2,8 +2,8 @@
 name = "wio_terminal"
 version = "0.7.3"
 authors = [
-    "Jesse Braham <jesse@beta7.io>",
-    "Tom <twitchyliquid64@ciphersink.net>"
+  "Jesse Braham <jesse@beta7.io>",
+  "Tom <twitchyliquid64@ciphersink.net>",
 ]
 edition = "2021"
 description = "Board support crate for the Seeed Studio Wio Terminal"
@@ -11,17 +11,8 @@ documentation = "https://docs.rs/wio-terminal/"
 readme = "README.md"
 repository = "https://github.com/atsamd-rs/atsamd"
 license = "MIT OR Apache-2.0"
-keywords = [
-    "arm",
-    "cortex-m",
-    "embedded-hal",
-    "no-std",
-]
-categories = [
-    "embedded",
-    "hardware-support",
-    "no-std",
-]
+keywords = ["arm", "cortex-m", "embedded-hal", "no-std"]
+categories = ["embedded", "hardware-support", "no-std"]
 
 exclude = ["assets", "src/_*"]
 
@@ -31,6 +22,7 @@ chip = "ATSAMD51P19A"
 
 [dependencies]
 bitfield = "0.13"
+modular-bitfield = "0.11"
 fugit = "0.3.7"
 cortex-m-rt = { version = "0.7", optional = true }
 
@@ -48,7 +40,11 @@ seeed-erpc = { version = "0.1.2", optional = true }
 
 defmt = "0.3"
 defmt-rtt = "0.4"
-embassy-executor = { version = "0.6.2", features = ["arch-cortex-m", "executor-thread", "task-arena-size-8192"] }
+embassy-executor = { version = "0.6.2", features = [
+  "arch-cortex-m",
+  "executor-thread",
+  "task-arena-size-8192",
+] }
 rtic-monotonics = { version = "2.0.1", features = ["cortex-m-systick"] }
 
 # Opentherm project specific dependnecies:

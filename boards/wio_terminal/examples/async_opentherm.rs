@@ -2,10 +2,10 @@
 #![no_main]
 
 use bsp::hal::time::Hertz;
-use hal::fugit::Hertz as FugitHertz;
-use hal::fugit::MillisDuration;
 use core::time::Duration;
 use defmt_rtt as _;
+use hal::fugit::Hertz as FugitHertz;
+use hal::fugit::MillisDuration;
 use heapless::Vec;
 use panic_probe as _;
 
@@ -38,6 +38,8 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use rtic_monotonics::Monotonic;
+
+use modular_bitfield::prelude::*;
 
 rtic_monotonics::systick_monotonic!(Mono, 10000);
 
@@ -138,21 +140,60 @@ mod boiler_implementation {
     impl OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture {}
 }
 
+#[inline]
+pub fn check_and_clear_interrupts(flags: InterruptFlags) -> InterruptFlags {
+    let mut cleared = 0;
+    let tc4 = unsafe { crate::pac::Peripherals::steal().tc4 };
+    tc4.count8().intflag().modify(|r, w| {
+        cleared = r.bits() & flags.into_bytes()[0];
+        unsafe { w.bits(flags.into_bytes()[0]) }
+    });
+    InterruptFlags::from_bytes([cleared])
+}
+
 #[embassy_executor::task]
-async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/) {
+async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
+{
+    let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
+    let mut value_cc1 = 0x00u8;
     loop {
+        //  Read this value:
+        let vcc1 = tc4_readonly.count8().cc(1).read().bits();
+        if vcc1 != value_cc1 {
+            hprintln!("tc4.cc1:0x{:08X}", vcc1).ok();
+            value_cc1 = vcc1;
+        }
+
         //  uart_tx.write(b"Hello, world!").await.unwrap();
         //  defmt::info!("Sent 10 bytes");
 
         //  let mut delay = Delay::new(core.SYST, &mut clocks);
-        let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
         let _ = tc4_readonly
             .count8()
             .ctrlbset()
             .write(|w| w.cmd().readsync());
         let cnt_value = tc4_readonly.count8().count().read().bits();
+        let _ = tc4_readonly
+            .count8()
+            .ctrlbset()
+            .write(|w| w.cmd().readsync());
+        let cn2_value = tc4_readonly.count8().count().read().bits();
 
-        hprintln!("cnt:0x{:08X}", cnt_value).ok();
+        hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+        //  hprintln!(
+        //      "tc4int:0x{:08X}, cc1:0x{:08X}",
+        //      tc4_readonly.count8().intflag().read().bits(),
+        //      tc4_readonly.count8().cc(1).read().bits()
+        //  )
+        //  .ok();
+        //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
+        //  hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+
+        let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
+        if check_and_clear_interrupts(flags_to_check).ovf() {
+            //  hprintln!("Overflow detected").ok();
+        }
 
         //  delay.delay_ms(200u16);
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
@@ -194,13 +235,8 @@ async fn main(spawner: embassy_executor::Spawner) {
     let pwm_pin = pins.pb09.into_alternate::<E>();
 
     let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
-    hprintln!(
-        "TC4.per:0x{:08X}",
-        tc4_readonly.count8().perbuf().read().bits()
-    )
-    .ok();
 
-    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
+    // let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
     //  self.regs.chctrla.modify(|_, w| w.swrst().set_bit());
     //  .chctrla.read().swrst().bit_is_set() {}
     //  while self.regs.chctrla.read().swrst().bit_is_set() {}
@@ -214,193 +250,163 @@ async fn main(spawner: embassy_executor::Spawner) {
         TC4Pinout::Pb9(pwm_pin),
         &mut peripherals.mclk,
     )
-    .with_dma_channel(channel0); // TODO: Channel shall be changed to channel0 later on. Thiw is
+    .with_dma_channel(channel0); // TODO: Channel shall be changed to channel0 later on. This is
                                  // just for prototyping
+
+    hprintln!(
+        "TC4.perbuf:0x{:08X}",
+        tc4_readonly.count8().perbuf().read().bits()
+    )
+    .ok();
+    hprintln!(
+        "TC4.ctrla:0x{:08X}",
+        tc4_readonly.count8().ctrla().read().bits()
+    )
+    .ok();
+    hprintln!(
+        "TC4.ctrlbSet:0x{:08X}",
+        tc4_readonly.count8().ctrlbset().read().bits()
+    )
+    .ok();
+    hprintln!(
+        "TC4.ctrlbClr:0x{:08X}",
+        tc4_readonly.count8().ctrlbclr().read().bits()
+    )
+    .ok();
+    hprintln!(
+        "TC4.wave:0x{:08X}",
+        tc4_readonly.count8().wave().read().bits()
+    )
+    .ok();
+    hprintln!(
+        "TC4.cc0:0x{:08X}",
+        tc4_readonly.count8().cc(0).read().bits()
+    )
+    .ok();
+    hprintln!(
+        "TC4.cc1:0x{:08X}",
+        tc4_readonly.count8().cc(1).read().bits()
+    )
+    .ok();
 
     spawner.spawn(print_timer_state_task()).unwrap();
 
+    //  Control duty using using value between 0 and PER register which is set to 233
+    //  233 / 2 = 116 in hex = 0x74
+    //  pwm4.start_regular_pwm(0x74u8);
+
+    hprintln!("main:: waiting Timer start").ok();
+    Mono::delay(MillisDuration::<u32>::from_ticks(2000).convert()).await;
+    hprintln!("main:: starting Timer").ok();
+    pwm4.start_regular_pwm(0x10u8);
+    hprintln!("main:: waiting DMA transfer").ok();
+    Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
+    pwm4.start_regular_pwm(0xffu8);
+    hprintln!("main:: waiting DMA transfer").ok();
+    Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
+    pwm4.start_regular_pwm(210u8);
+    hprintln!("main:: waiting DMA transfer").ok();
+    Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
+    hprintln!("main:: starting DMA transfer").ok();
+    pwm4.start_regular_pwm(0xffu8);
+    hprintln!("main:: timer ff").ok();
+    Mono::delay(MillisDuration::<u32>::from_ticks(10).convert()).await;
+
+    //  DMA setup:
+    let mut source = [0xffu8; 65];
+    //  for (index, value) in source.iter_mut().enumerate() {
+    //      *value = index as u8;
+    //  }
+    source
+        .iter_mut()
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 0) //  take every second element
+        .for_each(|(i, v)| {
+            *v = 0x00u8;
+        });
+
+    //  This will start timer, but not yet the DMA transfer
+
+    let dma_future = pwm4.start_timer_prepare_dma_transfer(0xffu8, &mut source);
+
+    Mono::delay(MillisDuration::<u32>::from_ticks(5).convert()).await;
+    //  This will start the DMA transfer
+    dma_future.await.unwrap();
+
+    //  pwm4.start_regular_pwm(0x10u8); // To see on the analzer
+    hprintln!("main:: DMA transfer finished").ok();
+
+    let dma_future = pwm4.start_timer_prepare_dma_transfer(0xffu8, &mut source);
+    Mono::delay(MillisDuration::<u32>::from_ticks(5).convert()).await;
+    dma_future.await.unwrap();
+
     loop {
-        //  DMA setup:
-        let mut source = [0x7fu8; 16];
-        for (index, value) in source.iter_mut().enumerate() {
-            *value = index as u8;
-        }
-
-        //  let pwm_dma_address =
-        //      PwmWg4::<PB09>::GetDmaPtr(unsafe { crate::pac::Peripherals::steal().tc4 });
-        //  let pwm_dma_address = pwm4.get_dma_ptr();
-        //  let dma_future = channel0.transfer_future(
-        //      &mut source,
-        //      pwm_dma_address,
-        //      TriggerSource::Tc4Ovf,
-        //      TriggerAction::Burst,
-        //  );
-        //  .await
-        //  .unwrap();
-        /* Now, how to poll the future manually? */
-        //  let _result = future.poll();
-
-        let dma_future = pwm4.start(&mut source);
-
-        // Waker is just a simple stub in this example.
-        let waker = unsafe {
-            core::task::Waker::from_raw(core::task::RawWaker::new(
-                core::ptr::null(),
-                &RAW_WAKER_VTABLE,
-            ))
-        };
-
-        // Pin the future to prevent it from being moved
-        //  let future_pin: Pin<&mut MyFuture> = unsafe { Pin::new_unchecked(&mut FUTURE) };
-
-        let mut cx = Context::from_waker(&waker);
-        // Poll the future manually in the `no_std` environment
-        let mut dma_future_pin = core::pin::pin!(dma_future);
-        //  , &waker);
-
-        //  let max_duty = pwm4.get_max_duty();
-        //  pwm4.set_duty(max_duty / 2);
-        // Manually calling poll shall trigger the DMA transfer:
-        let result = match dma_future_pin.as_mut().poll(&mut cx) {
-            Poll::Pending => unsafe {
-                //  core::hint::unreachable_unchecked()
-                hprintln!("Pending").ok();
-            },
-            Poll::Ready(output) => {
-                hprintln!(
-                    "Ready, DMA CH[0].status 0x{:08X}",
-                    dmac_readonly.channel(0).chstatus().read().bits()
-                )
-                .ok();
-                continue;
-            }
-        };
-
-        let dma_status = dmac_readonly.baseaddr().read().bits();
-        hprintln!("DMA BASEADDR: 0x{:08X}", dma_status).ok();
-        let dma_status = dmac_readonly.channel(0).chctrla().read().bits();
-        hprintln!("DMA CH[0].chctrla 0x{:08X}", dma_status).ok();
-        hprintln!(
-            "DMA CH[0].chctrlb 0x{:08X}",
-            dmac_readonly.channel(0).chctrlb().read().bits()
-        )
-        .ok();
-        hprintln!(
-            "DMA CH[0].intflag 0x{:08X}",
-            dmac_readonly.channel(0).chintflag().read().bits()
-        )
-        .ok();
-        hprintln!(
-            "DMA CH[0].status 0x{:08X}",
-            dmac_readonly.channel(0).chstatus().read().bits()
-        )
-        .ok();
-        // hprintln!("DMA CH[0].wave 0x{:08X}", dmac_readonly.channel(0).chwave().read().bits()).ok();
-        //  hprintln!{"{}", }.ok();
-        //  pwm4.set_duty(max_duty / 2);
-        hprintln!(
-            "TC4.per:0x{:08X}",
-            tc4_readonly.count8().per().read().bits()
-        )
-        .ok();
-        hprintln!(
-            "TC4.perbuf:0x{:08X}",
-            tc4_readonly.count8().perbuf().read().bits()
-        )
-        .ok();
-        hprintln!(
-            "TC4.ctrla:0x{:08X}",
-            tc4_readonly.count8().ctrla().read().bits()
-        )
-        .ok();
-
-        loop {
-            let dma_status = dmac_readonly.active().read().bits();
-            let tc4_cc0_val = tc4_readonly.count8().cc(0).read().bits();
-            let tc4_cc_val = tc4_readonly.count8().cc(1).read().bits();
-            let _ = tc4_readonly
-                .count8()
-                .ctrlbset()
-                .write(|w| w.cmd().readsync());
-            let cnt_value = tc4_readonly.count8().count().read().bits();
-            let _ = tc4_readonly
-                .count8()
-                .ctrlbset()
-                .write(|w| w.cmd().readsync());
-            let cnt2_value = tc4_readonly.count8().count().read().bits();
-
-            hprintln!("act:0x{:08X}", dma_status).ok();
-            hprintln!("cc1:0x{:08X}", tc4_cc_val).ok();
-            hprintln!("cnt:0x{:08X}", cnt_value).ok();
-            hprintln!("cnt:0x{:08X}", cnt2_value).ok();
-            if dma_status == 0x0 {
-                break;
-            }
-        }
-
-        let result = match dma_future_pin.as_mut().poll(&mut cx) {
-            Poll::Pending => unsafe {
-                //  core::hint::unreachable_unchecked()
-                hprintln!("Pending").ok();
-                Ok(())
-            },
-            Poll::Ready(output) => {
-                hprintln!(
-                    "Ready, DMA CH[0].status 0x{:08X}",
-                    dmac_readonly.channel(0).chstatus().read().bits()
-                )
-                .ok();
-                output
-            }
-        };
-
-        //  delay.delay_ms(5000u16);
+        //      hprintln!("main:: loop{} has finished").ok();
+        //      //  delay.delay_ms(5000u16);
         Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
-        //  pwm4.set_duty(max_duty / 8);
-        //  delay.delay_ms(2000u16);
+        //      //  pwm4.set_duty(max_duty / 8);
+        //      //  delay.delay_ms(2000u16);
     }
 
-    //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
-    let mut user_led: UserLed = pins.pa15.into();
+    //  //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
+    //  let mut user_led: UserLed = pins.pa15.into();
 
-    let _internal_clock = clocks
-        .configure_gclk_divider_and_source(ClockGenId::Gclk2, 1, ClockSource::Osculp32k, false)
-        .unwrap();
-    clocks.configure_standby(ClockGenId::Gclk2, true);
+    //  let _internal_clock = clocks
+    //      .configure_gclk_divider_and_source(ClockGenId::Gclk2, 1, ClockSource::Osculp32k, false)
+    //      .unwrap();
+    //  clocks.configure_standby(ClockGenId::Gclk2, true);
 
-    //  let edge_trigger_capture_dev = AtsamdEdgeTriggerCapture::new();
+    //  //  let edge_trigger_capture_dev = AtsamdEdgeTriggerCapture::new();
 
-    // Configure a clock for the EIC peripheral
-    let gclk2 = clocks.get_gclk(ClockGenId::Gclk2).unwrap();
-    let eic_clock = clocks.eic(&gclk2).unwrap();
+    //  // Configure a clock for the EIC peripheral
+    //  let gclk2 = clocks.get_gclk(ClockGenId::Gclk2).unwrap();
+    //  let eic_clock = clocks.eic(&gclk2).unwrap();
 
-    let eic_channels = Eic::new(&mut peripherals.mclk, eic_clock, peripherals.eic).split();
+    //  let eic_channels = Eic::new(&mut peripherals.mclk, eic_clock, peripherals.eic).split();
 
-    let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
-                                                                //  let pb_09_ot_tx: GpioPin<_, PushPullOutput> = pins.pb09.into(); // D1
-                                                                //  let capture_device = RpEdgeCapture::new(async_input);
-                                                                //  let mut open_therm_bus = AtsamdEdgeTriggerCapture::new(pb_09_ot_tx);
-    let example_vector = heapless::Vec::<bool, 13>::from_slice(&[
-        true, true, false, true, false, true, false, false, true, false, false,
-    ])
-    .unwrap();
-    //  let _ = open_therm_bus.trigger(example_vector.into_iter(), Duration::from_millis(100));
+    //  let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
+    //                                                              //  let pb_09_ot_tx: GpioPin<_, PushPullOutput> = pins.pb09.into(); // D1
+    //                                                              //  let capture_device = RpEdgeCapture::new(async_input);
+    //                                                              //  let mut open_therm_bus = AtsamdEdgeTriggerCapture::new(pb_09_ot_tx);
+    //  let example_vector = heapless::Vec::<bool, 13>::from_slice(&[
+    //      true, true, false, true, false, true, false, false, true, false, false,
+    //  ])
+    //  .unwrap();
+    //  //  let _ = open_therm_bus.trigger(example_vector.into_iter(), Duration::from_millis(100));
 
-    #[cfg(feature = "use_opentherm")]
-    let time_driver = AtsamdTimeDriver::new();
-    //  let mut boiler_controller = BoilerControl::new(open_therm_bus, time_driver);
-    //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
-    //  let _ = boiler_controller.enable_ch(CHState::Enable(true));
+    //  #[cfg(feature = "use_opentherm")]
+    //  let time_driver = AtsamdTimeDriver::new();
+    //  //  let mut boiler_controller = BoilerControl::new(open_therm_bus, time_driver);
+    //  //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
+    //  //  let _ = boiler_controller.enable_ch(CHState::Enable(true));
 
-    let button: GpioPin<_, PullUpInterrupt> = pins.pd10.into();
-    let mut extint = eic_channels.5.with_pin(button).into_future(Irqs);
-    extint.enable_interrupt();
+    //  let button: GpioPin<_, PullUpInterrupt> = pins.pd10.into();
+    //  let mut extint = eic_channels.5.with_pin(button).into_future(Irqs);
+    //  extint.enable_interrupt();
 
-    loop {
-        // Here we show straight falling edge detection without
-        extint.wait(Sense::Fall).await;
-        defmt::info!("Falling edge detected");
-        user_led.toggle().unwrap();
+    //  loop {
+    //      // Here we show straight falling edge detection without
+    //      extint.wait(Sense::Fall).await;
+    //      defmt::info!("Falling edge detected");
+    //      user_led.toggle().unwrap();
+    //  }
+}
+
+#[bitfield]
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub struct InterruptFlags {
+    /// Overflow
+    pub ovf: bool,
+    /// Err
+    pub err: bool,
+    #[skip]
+    _reserved: B6,
+}
+
+impl Default for InterruptFlags {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
