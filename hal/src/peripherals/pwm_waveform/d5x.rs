@@ -5,7 +5,7 @@ use atsamd_hal_macros::hal_cfg;
 use crate::clock;
 #[cfg(feature = "async")]
 use crate::dmac::ReadyFuture;
-use crate::dmac::{AnyChannel, Beat, Buffer, TriggerSource, TriggerAction, Error as DmacError};
+use crate::dmac::{AnyChannel, Beat, Buffer, Error as DmacError, TriggerAction, TriggerSource};
 use crate::gpio::*;
 use crate::gpio::{AlternateE, AnyPin, Pin};
 use crate::pac::Mclk;
@@ -56,7 +56,7 @@ unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
 //
 
 macro_rules! pwm_wg {
-    ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident)),+) => {
+    ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident, $event:ident)),+) => {
         $(
 
 use crate::pwm::$pinout;
@@ -78,23 +78,74 @@ pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
 }
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
-    pub async fn start(&mut self, generation_pattern: &mut [u8]) -> Result<(),DmacError> {
+
+    pub fn start_regular_pwm(&mut self, ccx_value: u8) {
+        let count = self.base_pwm.tc.count8();
+        count.cc(0).write(|w| unsafe { w.bits(0x00u8) });
+        while count.syncbusy().read().cc0().bit_is_set() {}
+        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
+        while count.syncbusy().read().cc1().bit_is_set() {}
+
+        count.ccbuf(0).write(|w| unsafe { w.bits(0x00u8) });
+        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
+
+        count.ctrla().modify(|_, w| w.enable().set_bit());
+        while count.syncbusy().read().enable().bit_is_set() {}
+    }
+
+    pub async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(),DmacError> {
+
+        let count = self.base_pwm.tc.count8();
+
+        count.cc(0).write(|w| unsafe { w.bits(0x00u8) });
+        while count.syncbusy().read().cc0().bit_is_set() {}
+        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
+        while count.syncbusy().read().cc1().bit_is_set() {}
+        count.ccbuf(0).write(|w| unsafe { w.bits(0x00u8) });
+        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
+
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
         let dma_future = self._channel.as_mut().transfer_future(
             generation_pattern,
             pwm_dma_address,
-            TriggerSource::Tc4Ovf,
+            TriggerSource::$event,
             TriggerAction::Burst,
         );
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
         //  of the timer.
-        let count = self.base_pwm.tc.count8();
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
-        dma_future.await
+
+        //  First poll the future starts the DMA transfer
+        let value_to_return = dma_future.await;
+
+        count.cc(1).write(|w| unsafe { w.bits(0x00u8) });
+        count.ccbuf(1).write(|w| unsafe { w.bits(0x00u8) });
+
+        // Disable the timer when DMA transfer is done.
+        //  count.ctrla().modify(|_, w| w.enable().clear_bit());
+        //  while count.syncbusy().read().enable().bit_is_set() {}
+        //  count.ctrla().write(|w| w.swrst().set_bit());
+        //  while count.ctrla().read().bits() & 1 != 0 {}
+
+        value_to_return
     }
 }
 
+/*
+///
+/// PRESCALER = 6, in reference project written in C++
+/// cc = 233
+/// per = 233
+///
+/// As the timer is set to produce idle level signal, it can be started before
+/// we start the DMA transfer. It will naturally pick and start from the
+/// beginning of next cycle of the timer. Timer is configured to prodduce
+/// constant period signal by setting PER register to a value that corresponds
+/// to requested frequency of the manchester signal. Base of the working
+/// principle is that the timer CCx register will be loaded with either 0x00
+/// of 0xFF to produce either full cycle high or low signal.
+*/
 impl<I: PinId> $TYPE<I> {
     pub fn new_waveform_generator(
         clock: &clock::$clock,
@@ -103,6 +154,7 @@ impl<I: PinId> $TYPE<I> {
         pinout: $pinout<I>,
         mclk: &mut Mclk,
     ) -> Self {
+        const TIEMR_PERIOD: u8 = 233;  //  mclk / 256 / 233 = 1000 Hz
         let count = tc.count8();
         let tc_ccbuf_dma_data_register_address = tc.count8().ccbuf(1).as_ptr() as *const ();
         //  let PwmWaveformGeneratorPtr()(pub(in super::super) *mut T);
@@ -114,10 +166,11 @@ impl<I: PinId> $TYPE<I> {
         while count.ctrla().read().bits() & 1 != 0 {}
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
-        count.ctrla().modify(|_, w| w.copen1().set_bit());
+        //  TODO:  resolve copen1 question:
+        //  count.ctrla().modify(|_, w| w.copen1().set_bit());
         count.ctrla().modify(|_, w| w.mode().count8());
         count.ctrla().modify(|_, w| {
-            w.prescaler().div1024()
+            w.prescaler().div256()
             //  match params.divider {
             //      1 => w.prescaler().div1(),
             //      2 => w.prescaler().div2(),
@@ -132,13 +185,22 @@ impl<I: PinId> $TYPE<I> {
         });
         //  count.ctrla().write(|w| w.count8());
 
-        count.per().write(|w| unsafe { w.per().bits(0xffu8) });
-        count.perbuf().write(|w| unsafe { w.perbuf().bits(0xffu8) });
+        count.count().write(|w| unsafe { w.bits(233u8) });
+        count.per().write(|w| unsafe { w.bits(233u8) });
+        count.perbuf().write(|w| unsafe { w.bits(233u8) });
         //  while count.syncbusy().read().per().bit_is_set() {}
 
-        count.cc(0).write(|w| unsafe { w.cc().bits(params.cycles as u8) });
+        count.wave().write(|w| w.wavegen().npwm());
+        //  while count.syncbusy().read().wave().bit_is_set() {}
+
+        //  TODO: do the test:
+        //  prerequisites: forget DMA configuration
+        //  1) Set CCx to 0x00 and measure the signal value
+        //  2) Set CCx to 0x7F and measure the signal value and frequency
+        //  3) Set CCx to 0xFF and measure the signal value
+        count.cc(0).write(|w| unsafe { w.bits(0x00u8/*params.cycles as u8*/) });
         while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.cc().bits(0) });
+        count.cc(1).write(|w| unsafe { w.bits(0xffu8) });
         while count.syncbusy().read().cc1().bit_is_set() {}
 
         Self {
@@ -151,7 +213,7 @@ impl<I: PinId> $TYPE<I> {
     //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
     pub fn with_dma_channel<CH>(mut self, channel: CH ) -> [<$TYPE Future>]<I, CH>
         where
-        CH: AnyChannel<Status=ReadyFuture> 
+        CH: AnyChannel<Status=ReadyFuture>
     {
         [<$TYPE Future>] {
             base_pwm: self,
@@ -227,6 +289,7 @@ impl<I: PinId> $crate::ehal::pwm::SetDutyCycle for $TYPE<I> {
     }
 }
 
+
 impl<I: PinId> $crate::ehal_02::PwmPin for $TYPE<I> {
     type Duty = u16;
 
@@ -263,18 +326,18 @@ impl<I: PinId> $crate::ehal_02::PwmPin for $TYPE<I> {
 )+}}
 
 #[hal_cfg("tc0")]
-pwm_wg! { PwmWg0: (Tc0, TC0Pinout, Tc0Tc1Clock, apbamask, tc0_, PwmWg0Wrapper) }
+pwm_wg! { PwmWg0: (Tc0, TC0Pinout, Tc0Tc1Clock, apbamask, tc0_, PwmWg0Wrapper, Tc0Ovf) }
 #[hal_cfg("tc1")]
-pwm_wg! { PwmWg1: (Tc1, TC1Pinout, Tc0Tc1Clock, apbamask, tc1_, PwmWg1Wrapper) }
+pwm_wg! { PwmWg1: (Tc1, TC1Pinout, Tc0Tc1Clock, apbamask, tc1_, PwmWg1Wrapper, Tc1Ovf) }
 #[hal_cfg("tc2")]
-pwm_wg! { PwmWg2: (Tc2, TC2Pinout, Tc2Tc3Clock, apbbmask, tc2_, PwmWg2Wrapper) }
+pwm_wg! { PwmWg2: (Tc2, TC2Pinout, Tc2Tc3Clock, apbbmask, tc2_, PwmWg2Wrapper, Tc2Ovf) }
 #[hal_cfg("tc3")]
-pwm_wg! { PwmWg3: (Tc3, TC3Pinout, Tc2Tc3Clock, apbbmask, tc3_, PwmWg3Wrapper) }
+pwm_wg! { PwmWg3: (Tc3, TC3Pinout, Tc2Tc3Clock, apbbmask, tc3_, PwmWg3Wrapper, Tc3Ovf) }
 #[hal_cfg("tc4")]
-pwm_wg! { PwmWg4: (Tc4, TC4Pinout, Tc4Tc5Clock, apbcmask, tc4_, PwmWg4Wrapper) }
+pwm_wg! { PwmWg4: (Tc4, TC4Pinout, Tc4Tc5Clock, apbcmask, tc4_, PwmWg4Wrapper, Tc4Ovf) }
 #[hal_cfg("tc5")]
-pwm_wg! { PwmWg5: (Tc5, TC5Pinout, Tc4Tc5Clock, apbcmask, tc5_, PwmWg5Wrapper) }
+pwm_wg! { PwmWg5: (Tc5, TC5Pinout, Tc4Tc5Clock, apbcmask, tc5_, PwmWg5Wrapper, Tc5Ovf) }
 #[hal_cfg("tc6")]
-pwm_wg! { PwmWg6: (Tc6, TC6Pinout, Tc6Tc7Clock, apbdmask, tc6_, PwmWg6Wrapper) }
+pwm_wg! { PwmWg6: (Tc6, TC6Pinout, Tc6Tc7Clock, apbdmask, tc6_, PwmWg6Wrapper, Tc6Ovf) }
 #[hal_cfg("tc7")]
-pwm_wg! { PwmWg7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, tc7_, PwmWg7Wrapper) }
+pwm_wg! { PwmWg7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, tc7_, PwmWg7Wrapper, Tc7Ovf) }
