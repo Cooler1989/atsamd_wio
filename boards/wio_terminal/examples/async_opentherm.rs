@@ -14,7 +14,7 @@ use bsp::pac;
 use bsp::{
     hal,
     hal::gpio::{Output, OutputConfig, Pins, PushPull, PushPullOutput},
-    hal::gpio::{E, PB09},
+    hal::gpio::{E, PB08, PB09},
     pin_alias,
 };
 use wio_terminal::prelude::_embedded_hal_PwmPin;
@@ -110,7 +110,9 @@ mod boiler_implementation {
         D: dmac::AnyChannel<Status = ReadyFuture>,
         const N: usize = VEC_SIZE_CAPTURE,
     > {
-        output_pin: Option<GpioPin<PB09, Alternate<E>>>,
+        tx_pin: Option<GpioPin<PB09, Alternate<E>>>,
+        rx_pin: Option<GpioPin<PB08, PushPullOutput>>,
+        tx_init_duty_value: u8,
         pwm: PwmWg4Future<PB09, D>,
         dma: PhantomData<D>,
     }
@@ -121,6 +123,7 @@ mod boiler_implementation {
     {
         pub fn new(
             pin_tx: GpioPin<PB09, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PushPullOutput>,
             tc4_timer: pac::Tc4,
             mclk: &mut Mclk,
             tc4_tc5_clock: &Tc4Tc5Clock,
@@ -138,14 +141,16 @@ mod boiler_implementation {
             .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
                                             // just for prototyping
             Self {
-                output_pin: None,
+                tx_pin: None,
+                rx_pin: Some(pin_rx),
+                tx_init_duty_value: 0xff,
                 pwm: pwm4,
                 dma: PhantomData,
             }
         }
     }
 
-    impl<D> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<D>
+    impl<D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<D, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -154,7 +159,19 @@ mod boiler_implementation {
             iterator: impl Iterator<Item = bool>,
             period: core::time::Duration,
         ) -> Result<(), TriggerError> {
-            todo!()
+            let mut source: [u8; N] = [0x00u8; N];
+            for (idx, value) in iterator.enumerate() {
+                if idx >= N {
+                    break;
+                }
+                let level = if value { 0xffu8 } else { 0x00u8 };
+                source[idx] = level;
+            }
+            self.pwm.start_regular_pwm(self.tx_init_duty_value);
+            let dma_future = self
+                .pwm
+                .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
+            dma_future.await.map_err(|_| TriggerError::GenericError)
         }
     }
 
@@ -283,6 +300,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let pins = Pins::new(peripherals.port);
     let pwm_tx_pin = pins.pb09.into_push_pull_output();
+    let pwm_rx_pin = pins.pb08.into_push_pull_output();
     // let pwm_tx_pin = pins.pb09.into_alternate::<E>();
     let mut tc4_timer = peripherals.tc4;
 
@@ -376,13 +394,26 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  dma_future.await.unwrap();
 
     #[cfg(feature = "use_opentherm")]
-    let edge_trigger_capture_dev = boiler_implementation::AtsamdEdgeTriggerCapture::new(
+    let mut edge_trigger_capture_dev = boiler_implementation::AtsamdEdgeTriggerCapture::new(
         pwm_tx_pin,
+        pwm_rx_pin,
         tc4_timer,
         &mut peripherals.mclk,
         &clocks.tc4_tc5(&gclk0).unwrap(),
         channel0,
     );
+
+    let result = edge_trigger_capture_dev
+        .trigger(
+            [
+                true, true, false, true, false, true, false, false, true, false, false,
+            ]
+            .iter()
+            .copied(),
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
 
     loop {
         //      hprintln!("main:: loop{} has finished").ok();
