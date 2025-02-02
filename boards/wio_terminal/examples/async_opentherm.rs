@@ -98,22 +98,33 @@ async fn boiler_task() {}
 
 #[cfg(feature = "use_opentherm")]
 mod boiler_implementation {
+    use crate::dmac::ReadyFuture;
+    use crate::hal::pwm_wg::PwmWg4Future;
     use atsamd_hal::gpio::Alternate;
+    use core::marker::PhantomData;
 
     use super::*;
 
     const VEC_SIZE_CAPTURE: usize = 128;
-    pub(super) struct AtsamdEdgeTriggerCapture<const N: usize = VEC_SIZE_CAPTURE> {
-        output_pin: GpioPin<PB09, Alternate<E>>,
+    pub(super) struct AtsamdEdgeTriggerCapture<
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+        const N: usize = VEC_SIZE_CAPTURE,
+    > {
+        output_pin: Option<GpioPin<PB09, Alternate<E>>>,
+        pwm: PwmWg4Future<PB09, D>,
+        dma: PhantomData<D>,
     }
 
-    impl AtsamdEdgeTriggerCapture {
+    impl<D> AtsamdEdgeTriggerCapture<D>
+    where
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
         pub fn new(
             pin_tx: GpioPin<PB09, PushPullOutput>,
             tc4_timer: pac::Tc4,
             mclk: &mut Mclk,
             tc4_tc5_clock: &Tc4Tc5Clock,
-            dma_channel: dmac::AnyChannel,
+            dma_channel: D,
         ) -> Self {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
@@ -122,18 +133,22 @@ mod boiler_implementation {
                 Hertz::from_raw(32),
                 tc4_timer,
                 TC4Pinout::Pb9(pwm_tx_pin),
-                &mut mclk,
+                mclk,
             )
             .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
                                             // just for prototyping
-
             Self {
-                output_pin: pwm_tx_pin,
+                output_pin: None,
+                pwm: pwm4,
+                dma: PhantomData,
             }
         }
     }
 
-    impl EdgeTriggerInterface for AtsamdEdgeTriggerCapture {
+    impl<D> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<D>
+    where
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
         async fn trigger(
             &mut self,
             iterator: impl Iterator<Item = bool>,
@@ -143,7 +158,10 @@ mod boiler_implementation {
         }
     }
 
-    impl<const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<N> {
+    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<D>
+    where
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
         async fn start_capture(
             &mut self,
             timeout_inactive_capture: core::time::Duration,
@@ -166,7 +184,10 @@ mod boiler_implementation {
             todo!()
         }
     }
-    impl OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture {}
+    impl<D> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<D> where
+        D: dmac::AnyChannel<Status = ReadyFuture>
+    {
+    }
 }
 
 #[inline]
