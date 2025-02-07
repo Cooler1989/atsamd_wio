@@ -7,11 +7,10 @@ use embedded_graphics as eg;
 use panic_halt as _;
 use wio_terminal as wio;
 
+use cortex_m::interrupt::{free as disable_interrupts, CriticalSection};
 use eg::pixelcolor::Rgb565;
 use eg::prelude::*;
 use eg::primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Styled};
-
-use cortex_m::interrupt::{free as disable_interrupts, CriticalSection};
 use embedded_graphics::primitives::StyledDrawable;
 use wio::entry;
 use wio::hal::clock::GenericClockController;
@@ -58,7 +57,7 @@ fn main() -> ! {
         &mut peripherals.nvmctrl,
     );
     let mut delay = Delay::new(core.SYST, &mut clocks);
-    let sets = wio::Pins::new(peripherals.port).split();
+    let sets = wio::Pins::new(peripherals.port);
     let mut uled = sets.user_led.into_push_pull_output();
     uled.set_low().unwrap();
     let mut consumer = unsafe { Q.split().1 };

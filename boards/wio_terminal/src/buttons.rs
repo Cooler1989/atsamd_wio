@@ -1,3 +1,4 @@
+//  use crate::buttons::eic::Channel;
 use atsamd_hal::clock::GenericClockController;
 use atsamd_hal::eic;
 use atsamd_hal::eic::{Eic, Sense};
