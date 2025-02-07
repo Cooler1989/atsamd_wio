@@ -25,47 +25,44 @@ pub use atsamd_hal::{self as hal, pac};
 // remaining have their members exposed via the Sets struct.
 pub mod prelude;
 
-//  mod buttons;
-//  mod display;
-//  mod pins;
+mod buttons;
+mod display;
+mod pins;
 //  mod sensors;
 //  mod serial;
 //  mod sound;
 //  mod storage;
 
-//  pub use buttons::*;
-//  pub use display::*;
-//  pub use pins::Pins;
+pub use buttons::*;
+pub use display::*;
 //  use atsamd_hal::gpio::Pins;
-//  pub use pins::*;
+pub use pins::Pins;
+pub use pins::*;
 //  pub use sensors::*;
 //  pub use serial::*;
 //  pub use sound::*;
 //  pub use storage::*;
 
-pub mod pins {
-    use super::hal;
-    
-    hal::bsp_pins!(
-        PA15 {
-        /// User LED
-            name: user_led,
-            aliases: {
-            PushPullOutput: UserLed,
-            Reset: UserLedReset,
-        }
-        //  PA13 {
-        //      name: a0_d0,
-        //      aliases: {
-        //      PushPullOutput: OpenThermTxPin,
-        //      }
-        //  }
-        //  PA14 {
-        //      name: a1_d1,
-        //  }
-    }
-);
-}
+//  pub mod pins {
+//      use super::hal;
+//
+//      hal::bsp_pins!(
+//              PA15 {
+//                  name: user_led_custom,
+//                  aliases: {
+//                  PushPullOutput: UserLed,
+//                  Reset: UserLedReset,
+//                  }
+//              }
+//              PA14 {
+//                  name: user_led_second,
+//                  aliases: {
+//                  PushPullOutput: UserLedSecond,
+//                  Reset: UserLedResetSecond,
+//                  }
+//              }
+//      );
+//  } //  pins
 
 #[cfg(feature = "wifi")]
 mod wifi;

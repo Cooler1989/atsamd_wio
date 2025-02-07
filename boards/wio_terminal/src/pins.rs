@@ -1,5 +1,5 @@
 use super::buttons::ButtonPins;
-//  use super::display::Display;
+use super::display::Display;
 //  use super::sensors::{Accelerometer, LightSensor};
 //  use super::serial::{Uart, Usb};
 //  use super::sound::{Buzzer, Microphone};
@@ -11,7 +11,6 @@ use super::buttons::ButtonPins;
 pub mod aliases {
     atsamd_hal::bsp_pins!(
         PA15 {
-        /// User LED
             name: user_led,
             aliases: {
                 PushPullOutput: UserLed,

@@ -1,8 +1,11 @@
 use atsamd_hal::clock::GenericClockController;
 use atsamd_hal::ehal::delay::DelayNs;
 //  use atsamd_hal::ehal::digital::v2::OutputPin;
-use atsamd_hal::ehal::spi::{Phase, Polarity};
-use atsamd_hal::pac::{MCLK, Sercom7 as PacSercom7};
+use atsamd_hal::ehal::digital::OutputPin;
+use atsamd_hal::ehal::spi::{
+    ErrorKind, ErrorType, Operation as SpiOperation, Phase, Polarity, SpiDevice,
+};
+use atsamd_hal::pac::{Mclk, Sercom7 as PacSercom7};
 use atsamd_hal::sercom::spi;
 use atsamd_hal::sercom::{IoSet4, Sercom7};
 use atsamd_hal::time::Hertz;
@@ -40,19 +43,40 @@ pub type LcdPads = spi::Pads<Sercom7, IoSet4, NoneT, LcdMosi, LcdSck>;
 pub type LcdSpi = spi::Spi<spi::Config<LcdPads>, spi::Tx>;
 
 /// Type alias for the ILI9341 LCD display.
-pub type LCD = Ili9341<SPIInterface<LcdSpi, LcdDc, LcdCs>, LcdReset>;
+pub type LCD = Ili9341<SPIInterface<LcdSpi, LcdDc>, LcdReset>;
 
 pub use ili9341::Scroller;
+
+struct SpiDeviceImpl {}
+
+#[derive(Debug)]
+enum TemporaryError {}
+
+impl ErrorType for SpiDeviceImpl {
+    type Error = ErrorKind;
+}
+
+impl SpiDeviceImpl {
+    fn new() -> Self {
+        Self {}
+    }
+}
+impl SpiDevice for SpiDeviceImpl {
+    //  fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
+    fn transaction(&mut self, operations: &mut [SpiOperation<'_, u8>]) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
 
 impl Display {
     /// Initialize the display and its corresponding SPI bus peripheral. Return
     /// a tuple containing the configured display driver struct and backlight
     /// pin.
-    pub fn init<D: DelayMs<u16>>(
+    pub fn init<D: DelayNs>(
         self,
         clocks: &mut GenericClockController,
         sercom7: PacSercom7,
-        mclk: &mut MCLK,
+        mclk: &mut Mclk,
         baud: Hertz,
         delay: &mut D,
     ) -> Result<(LCD, LcdBacklight), ()> {
@@ -72,9 +96,10 @@ impl Display {
 
         // Create a SPIInterface over the peripheral, then create the ILI9341 driver
         // using said interface and set its default orientation.
-        let interface = SPIInterface::new(spi, dc, cs);
+        let interface = SPIInterface::new(spi, dc);
+        let interface_stub = SpiDeviceImpl::new();
         let ili9341 = Ili9341::new(
-            interface,
+            interface_stub,
             reset,
             delay,
             Orientation::LandscapeFlipped,

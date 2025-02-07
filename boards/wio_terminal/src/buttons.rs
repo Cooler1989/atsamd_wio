@@ -1,13 +1,19 @@
+//  use crate::buttons::eic::Channel;
 use atsamd_hal::clock::GenericClockController;
-use atsamd_hal::eic::{Eic, Sense};
+use atsamd_hal::eic::Channel;
+use atsamd_hal::eic::ExtInt;
+use atsamd_hal::eic::{Ch10, Ch11, Ch12, Ch3, Ch4, Ch5, Ch7, Eic, Sense};
 //  use atsamd_hal::eic::pin::{
 //      ExtInt10, ExtInt11, ExtInt12, ExtInt3, ExtInt4, ExtInt5, ExtInt7, ExternalInterrupt, Sense,
 //  };
 use atsamd_hal::pac::{interrupt, Eic as PacEic, Mclk};
+use crate::hal::gpio::{PC27, PC28, PD08, PD09, PD10, PD12, PD20};
+use crate::hal::gpio::Reset;
 
 use cortex_m::peripheral::NVIC;
 
 use super::pins::aliases::*;
+use super::pins::*;
 
 use atsamd_hal::eic;
 
@@ -43,18 +49,18 @@ impl ButtonPins {
         let eic_clock = clocks.eic(&gclk1).unwrap();
         //  let mut eic = eic::init_with_ulp32k(mclk, eic_clock, eic);
 
-        eic.button_debounce_pins(&[
-            self.button1.id(),
-            self.button2.id(),
-            self.button3.id(),
-            self.switch_x.id(),
-            self.switch_y.id(),
-            self.switch_z.id(),
-            self.switch_u.id(),
-            self.switch_b.id(),
-        ]);
+        //  eic.button_debounce_pins(&[
+        //      self.button1.id(),
+        //      self.button2.id(),
+        //      self.button3.id(),
+        //      self.switch_x.id(),
+        //      self.switch_y.id(),
+        //      self.switch_z.id(),
+        //      self.switch_u.id(),
+        //      self.switch_b.id(),
+        //  ]);
 
-        let eic_channels = Eic::new(&mut mclk, eic_clock, eic).split();
+        let eic_channels = Eic::new(mclk, eic_clock, eic).split();
 
         //  let button: Pin<_, PullUpInterrupt> = pins.d10.into();
         //  let mut extint = eic_channels.2.with_pin(button);
@@ -65,7 +71,7 @@ impl ButtonPins {
         // Unfortunately, the pin assigned to B1 shares the same
         // ExtInt line as up on the joystick. As such, we don't
         // support B1.
-        
+
         // let eic_clock = clocks.eic(&gclk0).unwrap();
         // // Initialize the EIC peripheral
         // let eic = Eic::new(&mut peripherals.pm, eic_clock, peripherals.eic);
@@ -79,8 +85,12 @@ impl ButtonPins {
         // let mut extint = eic_channels.2.with_pin(button);
 
         // let mut b1 = self.button1.into_floating_ei(port);
+        //
+        //  let mut b2 = eic_channels.11.with_pin(self.button2.into());
         let mut b2 = eic_channels.11.with_pin(self.button2.into());
+        //  let mut b3 = eic_channels.12.with_pin(self.button3.into());
         let mut b3 = eic_channels.12.with_pin(self.button3.into());
+        //  let mut x = eic_channels.3.with_pin(self.switch_x.into());
         let mut x = eic_channels.3.with_pin(self.switch_x.into());
         let mut y = eic_channels.4.with_pin(self.switch_y.into());
         let mut z = eic_channels.5.with_pin(self.switch_z.into());
@@ -88,25 +98,26 @@ impl ButtonPins {
         let mut b = eic_channels.7.with_pin(self.switch_b.into());
 
         // b1.sense(&mut eic, Sense::Both);
-        b2.sense(&mut eic, Sense::Both);
-        b3.sense(&mut eic, Sense::Both);
-        x.sense(&mut eic, Sense::Both);
-        y.sense(&mut eic, Sense::Both);
-        z.sense(&mut eic, Sense::Both);
-        u.sense(&mut eic, Sense::Both);
-        b.sense(&mut eic, Sense::Both);
+        b2.sense(Sense::Both);
+        b3.sense(Sense::Both);
+        x.sense(Sense::Both);
+        y.sense(Sense::Both);
+        z.sense(Sense::Both);
+        u.sense(Sense::Both);
+        b.sense(Sense::Both);
 
         // b1.enable_interrupt(&mut eic);
-        b2.enable_interrupt(&mut eic);
-        b3.enable_interrupt(&mut eic);
-        x.enable_interrupt(&mut eic);
-        y.enable_interrupt(&mut eic);
-        z.enable_interrupt(&mut eic);
-        u.enable_interrupt(&mut eic);
-        b.enable_interrupt(&mut eic);
+        b2.enable_interrupt();
+        b3.enable_interrupt();
+        x.enable_interrupt();
+        y.enable_interrupt();
+        z.enable_interrupt();
+        u.enable_interrupt();
+        b.enable_interrupt();
 
+        //  let b2_channel = E
         ButtonController {
-            _eic: eic.finalize(),
+            //  _eic: eic, //  .finalize()
             // b1,
             b2,
             b3,
@@ -138,16 +149,17 @@ pub struct ButtonEvent {
 }
 
 pub struct ButtonController {
-    _eic: eic::Eic,
+    //  _eic: eic::Eic,
+    //  _eic: PacEic,
     // b1: ExtInt10<Button1>,
-    b2: ExtInt11<Button2>,
-    b3: ExtInt12<Button3>,
-
-    x: ExtInt3<SwitchX>,
-    y: ExtInt4<SwitchY>,
-    z: ExtInt5<SwitchZ>,
-    u: ExtInt10<SwitchU>,
-    b: ExtInt7<SwitchB>,
+    //  b2_channel: Channel<ID = 11>,
+    b2: ExtInt<atsamd_hal::gpio::Pin<PC27, Reset>, Ch11>,
+    b3: ExtInt<atsamd_hal::gpio::Pin<PC28, Reset>, Ch12>,
+    x: ExtInt<atsamd_hal::gpio::Pin<PD08, Reset>, Ch3>,
+    y: ExtInt<atsamd_hal::gpio::Pin<PD09, Reset>, Ch4>,
+    z: ExtInt<atsamd_hal::gpio::Pin<PD10,Reset>, Ch5>,
+    u: ExtInt<atsamd_hal::gpio::Pin<PD20,Reset>, Ch10>,
+    b: ExtInt<atsamd_hal::gpio::Pin<PD12,Reset>, Ch7>,
 }
 
 macro_rules! isr {
