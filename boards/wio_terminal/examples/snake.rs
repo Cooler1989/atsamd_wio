@@ -6,10 +6,11 @@ use embedded_graphics as eg;
 use panic_halt as _;
 use wio_terminal as wio;
 
-use cortex_m::interrupt::{free as disable_interrupts, CriticalSection};
 use eg::pixelcolor::Rgb565;
 use eg::prelude::*;
 use eg::primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, Styled};
+
+use cortex_m::interrupt::{free as disable_interrupts, CriticalSection};
 use embedded_graphics::primitives::StyledDrawable;
 use wio::entry;
 use wio::hal::clock::GenericClockController;
@@ -20,7 +21,10 @@ use wio::{button_interrupt, Button, ButtonController, ButtonEvent};
 
 // Queues used for button stuff (just normal wio stuff) and then i use it for
 // managing clear queue
-use heapless::spsc::Queue;
+use heapless::{
+    consts::{U64, U8},
+    spsc::Queue,
+};
 
 // pseudo-random number generation
 use oorandom;
@@ -33,7 +37,7 @@ const GRID_WIDTH: u32 = DISPLAY_WIDTH / CELL_SIZE as u32;
 const GRID_HEIGHT: u32 = DISPLAY_HEIGHT / CELL_SIZE as u32;
 
 static mut BUTTON_CTRLR: Option<ButtonController> = None;
-static mut Q: Queue<ButtonEvent, 8> = Queue::new();
+static mut Q: Queue<ButtonEvent, U8> = Queue(heapless::i::Queue::new());
 
 button_interrupt!(
     BUTTON_CTRLR,
@@ -56,7 +60,7 @@ fn main() -> ! {
         &mut peripherals.nvmctrl,
     );
     let mut delay = Delay::new(core.SYST, &mut clocks);
-    let sets = wio::Pins::new(peripherals.port);
+    let sets = wio::Pins::new(peripherals.port).split();
     let mut uled = sets.user_led.into_push_pull_output();
     uled.set_low().unwrap();
     let mut consumer = unsafe { Q.split().1 };
@@ -224,7 +228,7 @@ impl<'a> Food<'a> {
 struct Snake {
     head_sprite: Styled<Rectangle, PrimitiveStyle<Rgb565>>,
     snake_direction: Direction,
-    cells_queue: Queue<(i32, i32), 64>,
+    cells_queue: Queue<(i32, i32), U64>,
 }
 
 impl Snake {
@@ -237,7 +241,7 @@ impl Snake {
             ((GRID_HEIGHT / 2 - 1) * CELL_SIZE) as i32,
         );
         let sprite = Rectangle::new(position, Size::new(CELL_SIZE, CELL_SIZE)).into_styled(style);
-        let cells_queue: Queue<(i32, i32), 64> = Queue::new();
+        let cells_queue: Queue<(i32, i32), U64> = Queue::new();
         Self {
             head_sprite: sprite,
             snake_direction: Direction::Down,
