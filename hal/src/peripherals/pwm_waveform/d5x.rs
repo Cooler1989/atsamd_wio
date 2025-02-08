@@ -119,8 +119,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         //  First poll the future starts the DMA transfer
         let value_to_return = dma_future.await;
 
-        count.cc(1).write(|w| unsafe { w.bits(0x00u8) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(0x00u8) });
+        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
+        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
 
         // Disable the timer when DMA transfer is done.
         //  count.ctrla().modify(|_, w| w.enable().clear_bit());
@@ -128,7 +128,23 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         //  count.ctrla().write(|w| w.swrst().set_bit());
         //  while count.ctrla().read().bits() & 1 != 0 {}
 
+        //  let Self{base_pwm, _channel} = self;
+        //  let $TYPE{..} = self.base_pwm;
+
+        //  pub struct $TYPE<I: PinId> {
+        //    clock_freq: Hertz,
+        //    tc: crate::pac::$TC,
+        //    pinout: $pinout<I>,
+        //  }
+        // [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>
+
         value_to_return
+    }
+
+    pub fn decompose(self) -> (DmaCh, crate::pac::$TC, $pinout<I>)
+    {
+        let $TYPE{clock_freq, tc, pinout} = self.base_pwm;
+        (self._channel, tc, pinout)
     }
 }
 
