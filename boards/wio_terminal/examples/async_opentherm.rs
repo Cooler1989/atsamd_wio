@@ -25,7 +25,7 @@ use hal::{
     dmac,
     dmac::{Beat, Buffer},
     dmac::{DmaController, PriorityLevel, TriggerAction, TriggerSource},
-    ehal::digital::StatefulOutputPin,
+    ehal::digital::{OutputPin, StatefulOutputPin},
     eic::{Eic, Sense},
     gpio::{Pin as GpioPin, PullUpInterrupt},
     pwm::{Pwm4, TC4Pinout},
@@ -70,28 +70,6 @@ atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
     DMAC: [DMAC_0, DMAC_1, DMAC_2, DMAC_OTHER] => atsamd_hal::dmac::InterruptHandler;
 });
 
-//  #[derive(Clone)]
-//  pub(crate) struct PwmWaveformGeneratorPtr<T: Beat>(pub *mut T);
-//
-//  unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
-//      type Beat = T;
-//
-//      #[inline]
-//      fn dma_ptr(&mut self) -> *mut Self::Beat {
-//          self.0
-//      }
-//
-//      #[inline]
-//      fn incrementing(&self) -> bool {
-//          false
-//      }
-//
-//      #[inline]
-//      fn buffer_len(&self) -> usize {
-//          1
-//      }
-//  }
-
 #[cfg(feature = "use_opentherm")]
 #[embassy_executor::task]
 async fn boiler_task() {}
@@ -131,7 +109,7 @@ mod boiler_implementation {
         ) -> Self {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
-            let mut pwm4 = PwmWg4::<PB09>::new_waveform_generator(
+            let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
                 tc4_tc5_clock,
                 Hertz::from_raw(32),
                 tc4_timer,
@@ -143,10 +121,22 @@ mod boiler_implementation {
             Self {
                 tx_pin: None,
                 rx_pin: Some(pin_rx),
-                tx_init_duty_value: 0xff,
+                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: pwm4,
                 dma: PhantomData,
             }
+        }
+
+        fn decompose(self) -> (D, pac::Tc4, TC4Pinout<PB09>) {
+            let pwm = self.pwm;
+            pwm.decompose()
+        }
+
+        pub fn transition_to_rx(self, channel: D, tc4: pac::Tc4, tc4_pinout: TC4Pinout<PB09>) {
+            //  TODO: Here we construct and return the receiver type level struct. Shall be
+            //  returned by ownning
+            todo!();
+            //  self.rx_pin;
         }
     }
 
@@ -159,14 +149,16 @@ mod boiler_implementation {
             iterator: impl Iterator<Item = bool>,
             period: core::time::Duration,
         ) -> Result<(), TriggerError> {
-            let mut source: [u8; N] = [0x00u8; N];
+            let mut source: [u8; N] = [self.tx_init_duty_value; N];
             for (idx, value) in iterator.enumerate() {
                 if idx >= N {
                     break;
                 }
+                //  TODO: Implement configurable idle bus state level
                 let level = if value { 0xffu8 } else { 0x00u8 };
                 source[idx] = level;
             }
+            //  TODO: Actually use the period to set the PWM frequency
             self.pwm.start_regular_pwm(self.tx_init_duty_value);
             let dma_future = self
                 .pwm
@@ -188,19 +180,21 @@ mod boiler_implementation {
         }
     }
 
-    struct AtsamdTimeDriver {}
+    pub(super) struct AtsamdTimeDriver {}
 
     impl AtsamdTimeDriver {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self {}
         }
     }
 
     impl TimeBaseRef for AtsamdTimeDriver {
         fn now(&self) -> Instant {
+            //  Instant { ticks: 0 }
             todo!()
         }
     }
+
     impl<D> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<D> where
         D: dmac::AnyChannel<Status = ReadyFuture>
     {
@@ -299,71 +293,19 @@ async fn main(spawner: embassy_executor::Spawner) {
     let channel1 = channels.1.init(PriorityLevel::Lvl0);
 
     let pins = Pins::new(peripherals.port);
-    let pwm_tx_pin = pins.pb09.into_push_pull_output();
+    let mut pwm_tx_pin = pins.pb09.into_push_pull_output();
+    //  Set initial level of OpenTherm bus to high:
+    pwm_tx_pin.set_high().unwrap();
+
     let pwm_rx_pin = pins.pb08.into_push_pull_output();
     // let pwm_tx_pin = pins.pb09.into_alternate::<E>();
     let mut tc4_timer = peripherals.tc4;
 
-    // let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+    Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
 
-    // hprintln!(
-    //     "TC4.perbuf:0x{:08X}",
-    // /    tc4_readonly.count8().perbuf().read().bits()
-    // )
-    // .ok();
-    // hprintln!(
-    //     "TC4.ctrla:0x{:08X}",
-    //     tc4_readonly.count8().ctrla().read().bits()
-    // )
-    // .ok();
-    // hprintln!(
-    //     "TC4.ctrlbSet:0x{:08X}",
-    //     tc4_readonly.count8().ctrlbset().read().bits()
-    // )
-    // .ok();
-    // hprintln!(
-    //     "TC4.ctrlbClr:0x{:08X}",
-    //     tc4_readonly.count8().ctrlbclr().read().bits()
-    // )
-    // .ok();
-    // hprintln!(
-    //     "TC4.wave:0x{:08X}",
-    //     tc4_readonly.count8().wave().read().bits()
-    // )
-    // .ok();
-    // hprintln!(
-    //     "TC4.cc0:0x{:08X}",
-    //     tc4_readonly.count8().cc(0).read().bits()
-    // )
-    // .ok();
-    // hprintln!(
-    //     "TC4.cc1:0x{:08X}",
-    //     tc4_readonly.count8().cc(1).read().bits()
-    // )
-    // .ok();
-
-    // spawner.spawn(print_timer_state_task()).unwrap();
-
-    // //  Control duty using using value between 0 and PER register which is set to 233
-    // //  233 / 2 = 116 in hex = 0x74
-    // //  pwm4.start_regular_pwm(0x74u8);
-
-    // hprintln!("main:: waiting Timer start").ok();
-    // Mono::delay(MillisDuration::<u32>::from_ticks(2000).convert()).await;
-    // hprintln!("main:: starting Timer").ok();
-    // pwm4.start_regular_pwm(0x10u8);
-    // hprintln!("main:: waiting DMA transfer").ok();
-    // Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
-    // pwm4.start_regular_pwm(0xffu8);
-    // hprintln!("main:: waiting DMA transfer").ok();
-    // Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
-    // pwm4.start_regular_pwm(210u8);
-    // hprintln!("main:: waiting DMA transfer").ok();
-    // Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
-    // hprintln!("main:: starting DMA transfer").ok();
-    // pwm4.start_regular_pwm(0xffu8);
-    // hprintln!("main:: timer ff").ok();
-    // Mono::delay(MillisDuration::<u32>::from_ticks(10).convert()).await;
+    //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
+    let mut user_led: UserLed = pins.pa15.into();
+    user_led.toggle().unwrap();
 
     //  DMA setup:
     let mut source = [0xffu8; 65];
@@ -378,21 +320,6 @@ async fn main(spawner: embassy_executor::Spawner) {
             *v = 0x00u8;
         });
 
-    //  This will start timer, but not yet the DMA transfer
-
-    //  let dma_future = pwm4.start_timer_prepare_dma_transfer(0xffu8, &mut source);
-
-    //  Mono::delay(MillisDuration::<u32>::from_ticks(5).convert()).await;
-    //  //  This will start the DMA transfer
-    //  dma_future.await.unwrap();
-
-    //  //  pwm4.start_regular_pwm(0x10u8); // To see on the analzer
-    //  hprintln!("main:: DMA transfer finished").ok();
-
-    //  let dma_future = pwm4.start_timer_prepare_dma_transfer(0xffu8, &mut source);
-    //  Mono::delay(MillisDuration::<u32>::from_ticks(5).convert()).await;
-    //  dma_future.await.unwrap();
-
     #[cfg(feature = "use_opentherm")]
     let mut edge_trigger_capture_dev = boiler_implementation::AtsamdEdgeTriggerCapture::new(
         pwm_tx_pin,
@@ -403,39 +330,31 @@ async fn main(spawner: embassy_executor::Spawner) {
         channel0,
     );
 
-    let result = edge_trigger_capture_dev
-        .trigger(
-            [
-                true, true, false, true, false, true, false, false, true, false, false,
-            ]
-            .iter()
-            .copied(),
-            Duration::from_millis(100),
-        )
-        .await
-        .unwrap();
+    let time_driver = boiler_implementation::AtsamdTimeDriver::new();
+    let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
+    let _ = boiler_controller.set_point(Temperature::Celsius(16));
+
+    hprintln!("main:: loop{} start:").ok();
 
     loop {
-        //      hprintln!("main:: loop{} has finished").ok();
-        //      //  delay.delay_ms(5000u16);
-        Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
+        let _ = boiler_controller.process().await.unwrap();
+        //  let _result = edge_trigger_capture_dev
+        //      .trigger(
+        //          [
+        //              true, true, true, true, false, true, false, true, false, false, true, false,
+        //              false, true, true, true,
+        //          ]
+        //          .iter()
+        //          .copied(),
+        //          Duration::from_millis(100),
+        //      )
+        //      .await
+        //      .unwrap();
+        user_led.toggle().unwrap();
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
         //      //  pwm4.set_duty(max_duty / 8);
         //      //  delay.delay_ms(2000u16);
     }
-
-    //  //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
-    //  let mut user_led: UserLed = pins.pa15.into();
-
-    //  let _internal_clock = clocks
-    //      .configure_gclk_divider_and_source(ClockGenId::Gclk2, 1, ClockSource::Osculp32k, false)
-    //      .unwrap();
-    //  clocks.configure_standby(ClockGenId::Gclk2, true);
-
-    //  // Configure a clock for the EIC peripheral
-    //  let gclk2 = clocks.get_gclk(ClockGenId::Gclk2).unwrap();
-    //  let eic_clock = clocks.eic(&gclk2).unwrap();
-
-    //  let eic_channels = Eic::new(&mut peripherals.mclk, eic_clock, peripherals.eic).split();
 
     //  let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
     //                                                              //  let pb_09_ot_tx: GpioPin<_, PushPullOutput> = pins.pb09.into(); // D1
@@ -452,17 +371,6 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  //  let mut boiler_controller = BoilerControl::new(open_therm_bus, time_driver);
     //  //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
     //  //  let _ = boiler_controller.enable_ch(CHState::Enable(true));
-
-    //  let button: GpioPin<_, PullUpInterrupt> = pins.pd10.into();
-    //  let mut extint = eic_channels.5.with_pin(button).into_future(Irqs);
-    //  extint.enable_interrupt();
-
-    //  loop {
-    //      // Here we show straight falling edge detection without
-    //      extint.wait(Sense::Fall).await;
-    //      defmt::info!("Falling edge detected");
-    //      user_led.toggle().unwrap();
-    //  }
 }
 
 #[bitfield]
