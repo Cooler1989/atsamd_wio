@@ -10,7 +10,8 @@ use atsamd_hal::sercom::spi;
 use atsamd_hal::sercom::{IoSet4, Sercom7};
 use atsamd_hal::time::Hertz;
 use atsamd_hal::typelevel::NoneT;
-use display_interface_spi::SPIInterface;
+use display_interface_spi::{SPIInterface};
+use display_interface::{WriteOnlyDataCommand, DisplayError, DataFormat};
 use ili9341::{DisplaySize240x320, Ili9341, Orientation};
 
 use super::pins::aliases::*;
@@ -43,11 +44,12 @@ pub type LcdPads = spi::Pads<Sercom7, IoSet4, NoneT, LcdMosi, LcdSck>;
 pub type LcdSpi = spi::Spi<spi::Config<LcdPads>, spi::Tx>;
 
 /// Type alias for the ILI9341 LCD display.
-pub type LCD = Ili9341<SPIInterface<LcdSpi, LcdDc>, LcdReset>;
+//  pub type LCD = Ili9341<SPIInterface<LcdSpi, LcdDc>, LcdReset>;
+pub type LCD = Ili9341<SpiDeviceImpl, LcdReset>;
 
 pub use ili9341::Scroller;
 
-struct SpiDeviceImpl {}
+pub struct SpiDeviceImpl {}
 
 #[derive(Debug)]
 enum TemporaryError {}
@@ -61,6 +63,16 @@ impl SpiDeviceImpl {
         Self {}
     }
 }
+
+impl WriteOnlyDataCommand for SpiDeviceImpl {
+    fn send_commands(&mut self, commands: DataFormat<'_>) -> Result<(), DisplayError> {
+        Ok(())
+    }
+    fn send_data(&mut self, data: DataFormat<'_>) -> Result<(), DisplayError> {
+        Ok(())
+    }
+}
+
 impl SpiDevice for SpiDeviceImpl {
     //  fn write(&mut self, words: &[u8]) -> Result<(), Self::Error> {
     fn transaction(&mut self, operations: &mut [SpiOperation<'_, u8>]) -> Result<(), Self::Error> {
@@ -69,6 +81,18 @@ impl SpiDevice for SpiDeviceImpl {
 }
 
 impl Display {
+    pub fn new(miso: LcdMisoReset, mosi: LcdMosiReset, sck: LcdSckReset, cs: LcdCsReset, dc: LcdDcReset, reset: LcdResetReset, backlight: LcdBacklightReset) -> Self {
+        Self {
+            miso,
+            mosi,
+            sck,
+            cs,
+            dc,
+            reset,
+            backlight,
+        }
+    }
+
     /// Initialize the display and its corresponding SPI bus peripheral. Return
     /// a tuple containing the configured display driver struct and backlight
     /// pin.

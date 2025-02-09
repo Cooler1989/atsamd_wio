@@ -2,6 +2,7 @@
 #![no_main]
 
 use core::fmt::Debug;
+use atsamd_hal::pac::tcc0::per;
 use embedded_graphics as eg;
 use panic_halt as _;
 use wio_terminal as wio;
@@ -16,7 +17,9 @@ use wio::hal::clock::GenericClockController;
 use wio::hal::delay::Delay;
 use wio::pac::{interrupt, CorePeripherals, Peripherals};
 use wio::prelude::*;
+use wio::ButtonPins;
 use wio::{button_interrupt, Button, ButtonController, ButtonEvent};
+use wio::display::Display;
 
 // Queues used for button stuff (just normal wio stuff) and then i use it for
 // managing clear queue
@@ -57,8 +60,6 @@ fn main() -> ! {
     );
     let mut delay = Delay::new(core.SYST, &mut clocks);
     let sets = wio::Pins::new(peripherals.port);
-    let mut uled = sets.user_led.into_push_pull_output();
-    uled.set_low().unwrap();
     let mut consumer = unsafe { Q.split().1 };
 
     // initializing styles
@@ -78,16 +79,31 @@ fn main() -> ! {
     // the screen, load an image of Ferris from a RAW file, and draw it to the
     // screen.
     // By default, the display is in the LandscapeFlipped orientation.
-    let (mut display, _backlight) = sets
-        .display
-        .init(
-            &mut clocks,
-            peripherals.sercom7,
-            &mut peripherals.mclk,
-            100.MHz(),
-            &mut delay,
-        )
-        .unwrap();
+    let (mut display, _backlight) = Display::new(
+        sets.lcd_miso,
+        sets.lcd_mosi,
+        sets.lcd_sck,
+        sets.lcd_cs,
+        sets.lcd_dc,
+        sets.lcd_reset,
+        sets.lcd_backlight,
+    ).init(
+        &mut clocks,
+        peripherals.sercom7,
+        &mut peripherals.mclk,
+        100.MHz(),
+        &mut delay,
+    ).unwrap();
+    //  Let (mut display, _backlight) = sets
+    //      .display
+    //      .init(
+    //          &mut clocks,
+    //          peripherals.sercom7,
+    //          &mut peripherals.mclk,
+    //          100.MHz(),
+    //          &mut delay,
+    //      )
+    //      .unwrap();
 
     // Initializing backdrop and initial sprite render
     Rectangle::new(Point::new(0, 0), Size::new(360, 240))
@@ -98,15 +114,29 @@ fn main() -> ! {
     let mut player = Snake::init();
     player.translate(&mut display);
 
+    let mut uled = sets.user_led.into_push_pull_output();
+    uled.set_low().unwrap();
+    let mut i2s_sdin = sets.i2s_sdin.into_push_pull_output();
     // initializing buttons
-    let button_ctrlr = sets
-        .buttons
-        .init(peripherals.eic, &mut clocks, &mut peripherals.mclk);
-    let nvic = &mut core.NVIC;
-    disable_interrupts(|_| unsafe {
-        button_ctrlr.enable(nvic);
-        BUTTON_CTRLR = Some(button_ctrlr);
-    });
+    let button_pins = ButtonPins::new(sets.button1, 
+        sets.button2, 
+        sets.button3, 
+        sets.switch_x, 
+        sets.switch_y, 
+        sets.switch_z, 
+        sets.switch_u, 
+        sets.switch_b);
+    let button_ctrlr = button_pins.init(
+        peripherals.eic,
+        &mut clocks,
+        &mut peripherals.mclk,
+    );
+
+    //  let nvic = &mut core.NVIC;
+    //  disable_interrupts(|_| unsafe {
+    //      button_ctrlr.enable(nvic);
+    //      BUTTON_CTRLR = Some(button_ctrlr);
+    //  });
 
     let mut food = Food::init_and_draw(5, &food_style, &snake_style, &mut display);
 

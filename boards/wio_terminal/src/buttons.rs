@@ -39,6 +39,18 @@ pub struct ButtonPins {
 }
 
 impl ButtonPins {
+    pub fn new(button1: Button1Reset, button2: Button2Reset, button3: Button3Reset, switch_x: SwitchXReset, switch_y: SwitchYReset, switch_z: SwitchZReset, switch_u: SwitchUReset, switch_b: SwitchBReset) -> Self {
+        ButtonPins {
+            button1,
+            button2,
+            button3,
+            switch_x,
+            switch_y,
+            switch_z,
+            switch_u,
+            switch_b,
+        }
+    }
     pub fn init(
         self,
         eic: PacEic,

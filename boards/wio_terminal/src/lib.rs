@@ -26,7 +26,7 @@ pub use atsamd_hal::{self as hal, pac};
 pub mod prelude;
 
 mod buttons;
-mod display;
+pub mod display;
 mod pins;
 //  mod sensors;
 //  mod serial;

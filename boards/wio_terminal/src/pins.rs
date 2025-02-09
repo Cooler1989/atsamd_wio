@@ -497,6 +497,29 @@ pub mod aliases {
 pub use aliases::Pins;
 use aliases::*;
 
+struct Sets {
+    pub buttons: ButtonPins,
+}
+
+impl Pins{
+    pub fn split(mut self) -> Sets {
+        let buttons = 
+            ButtonPins {
+                button1: self.button1,
+                button2: self.button2,
+                button3: self.button3,
+                switch_x: self.switch_x,
+                switch_y: self.switch_y,
+                switch_z: self.switch_z,
+                switch_u: self.switch_u,
+                switch_b: self.switch_b,
+            };
+    Sets{
+        buttons: buttons,
+    }
+    }
+}
+
 /// Other pins broken out to the RPi-compatible header.
 pub struct HeaderPins {
     pub a0_d0: A0D0Reset,
