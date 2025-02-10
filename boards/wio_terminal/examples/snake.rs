@@ -2,7 +2,6 @@
 #![no_main]
 
 use core::fmt::Debug;
-use atsamd_hal::pac::tcc0::per;
 use embedded_graphics as eg;
 use panic_halt as _;
 use wio_terminal as wio;
@@ -50,7 +49,7 @@ button_interrupt!(
 fn main() -> ! {
     // Initial initializations
     let mut peripherals = Peripherals::take().unwrap();
-    let mut core = CorePeripherals::take().unwrap();
+    let core = CorePeripherals::take().unwrap();
     let mut clocks = GenericClockController::with_external_32kosc(
         peripherals.gclk,
         &mut peripherals.mclk,
@@ -116,7 +115,7 @@ fn main() -> ! {
 
     let mut uled = sets.user_led.into_push_pull_output();
     uled.set_low().unwrap();
-    let mut i2s_sdin = sets.i2s_sdin.into_push_pull_output();
+    let i2s_sdin = sets.i2s_sdin.into_push_pull_output();
     // initializing buttons
     let button_pins = ButtonPins::new(sets.button1, 
         sets.button2, 
