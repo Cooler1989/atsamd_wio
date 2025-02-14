@@ -50,7 +50,8 @@ use boiler::opentherm_interface::{
     edge_trigger_capture_interface::{
         CaptureError, EdgeCaptureInterface, EdgeTriggerInterface, InitLevel, TriggerError,
     },
-    CHState, OpenThermEdgeTriggerBus, Temperature,
+    open_therm_message::{CHState, Temperature},
+    OpenThermEdgeTriggerBus,
 };
 #[cfg(feature = "use_opentherm")]
 use boiler::{BoilerControl, Instant, TimeBaseRef};
@@ -83,19 +84,29 @@ mod boiler_implementation {
 
     use super::*;
 
+    struct ResourceHolder<D> {
+        pin_rx: GpioPin<PB08, PushPullOutput>,
+        tc4_timer: pac::Tc4,
+        tc4_tc5_clock: Tc4Tc5Clock,
+        dma_channel: D,
+    }
+
     const VEC_SIZE_CAPTURE: usize = 128;
     pub(super) struct AtsamdEdgeTriggerCapture<
+        'a,
         D: dmac::AnyChannel<Status = ReadyFuture>,
         const N: usize = VEC_SIZE_CAPTURE,
     > {
         tx_pin: Option<GpioPin<PB09, Alternate<E>>>,
         rx_pin: Option<GpioPin<PB08, PushPullOutput>>,
         tx_init_duty_value: u8,
-        pwm: PwmWg4Future<PB09, D>,
+        pwm: Option<PwmWg4Future<PB09, D>>, // one alternative when TX operation
         dma: PhantomData<D>,
+        rx_resource_holder: Option<ResourceHolder<D>>,
+        mclk: &'a mut Mclk,
     }
 
-    impl<D> AtsamdEdgeTriggerCapture<D>
+    impl<'a, D> AtsamdEdgeTriggerCapture<'a, D>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -103,7 +114,7 @@ mod boiler_implementation {
             pin_tx: GpioPin<PB09, PushPullOutput>,
             pin_rx: GpioPin<PB08, PushPullOutput>,
             tc4_timer: pac::Tc4,
-            mclk: &mut Mclk,
+            mclk: &'a mut Mclk,
             tc4_tc5_clock: &Tc4Tc5Clock,
             dma_channel: D,
         ) -> Self {
@@ -122,14 +133,58 @@ mod boiler_implementation {
                 tx_pin: None,
                 rx_pin: Some(pin_rx),
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-                pwm: pwm4,
+                pwm: Some(pwm4),
                 dma: PhantomData,
+                rx_resource_holder: None,
+                mclk: mclk,
+            }
+        }
+
+        pub fn transition(self, tc4_tc5_clock: &Tc4Tc5Clock,) -> Option<Self> {
+            let (pin_tx, pin_rx, pwm) = (
+                self.tx_pin.unwrap(),
+                self.rx_pin.unwrap(),
+                self.pwm.unwrap(),
+            );
+            let (dma, tc4_timer, _d) = pwm.decompose();
+            Some(Self::new(
+                pin_tx.into(),
+                pin_rx,
+                tc4_timer,
+                self.mclk,
+                tc4_tc5_clock,
+                dma,
+            ))
+        }
+
+        pub fn new_for_rx(
+            pin_tx: GpioPin<PB09, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PushPullOutput>,
+            tc4_timer: pac::Tc4,
+            mclk: &'a mut Mclk,
+            tc4_tc5_clock: &Tc4Tc5Clock,
+            dma_channel: D,
+        ) -> Self {
+            Self {
+                tx_pin: Some(pin_tx.into()),
+                rx_pin: Some(pin_rx),
+                tx_init_duty_value: 0xff,
+                pwm: None,
+                dma: PhantomData,
+                rx_resource_holder: None,
+                mclk: mclk,
             }
         }
 
         fn decompose(self) -> (D, pac::Tc4, TC4Pinout<PB09>) {
-            let pwm = self.pwm;
-            pwm.decompose()
+            todo!()
+            //  let pwm = self.pwm;
+            //  let (pin_tx, pin_rx, tc4_timer, pwm) = (
+            //      self.tx_pin.unwrap(),
+            //      self.rx_pin.unwrap(),
+            //      self.tc4_timer,
+            //      self.pwm.unwrap(),
+            //  );
         }
 
         pub fn transition_to_rx(self, channel: D, tc4: pac::Tc4, tc4_pinout: TC4Pinout<PB09>) {
@@ -140,7 +195,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<D, N>
+    impl<D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'_, D, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -158,16 +213,23 @@ mod boiler_implementation {
                 let level = if value { 0xffu8 } else { 0x00u8 };
                 source[idx] = level;
             }
-            //  TODO: Actually use the period to set the PWM frequency
-            self.pwm.start_regular_pwm(self.tx_init_duty_value);
-            let dma_future = self
-                .pwm
-                .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
-            dma_future.await.map_err(|_| TriggerError::GenericError)
+            //  return:
+            if let Some(pwm) = self.pwm.as_mut() {
+                //  TODO: Actually use the period to set the PWM frequency
+                pwm.start_regular_pwm(self.tx_init_duty_value);
+                let dma_future = self
+                    .pwm
+                    .as_mut()
+                    .unwrap() /* TODO: remove runtime panic */
+                    .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
+                dma_future.await.map_err(|_| TriggerError::GenericError)
+            } else {
+                Err(TriggerError::GenericError)
+            }
         }
     }
 
-    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<D>
+    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'_, D>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -195,7 +257,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<D> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<D> where
+    impl<D> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<'_, D> where
         D: dmac::AnyChannel<Status = ReadyFuture>
     {
     }
@@ -330,26 +392,44 @@ async fn main(spawner: embassy_executor::Spawner) {
         channel0,
     );
 
-    let time_driver = boiler_implementation::AtsamdTimeDriver::new();
-    let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
-    let _ = boiler_controller.set_point(Temperature::Celsius(16));
+    let _time_driver = boiler_implementation::AtsamdTimeDriver::new();
+    //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
+    //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
+
+    let _result = edge_trigger_capture_dev
+        .trigger(
+            [
+                true, true, true, true, false, true, false, true, false, false, true, false, false,
+                true, true, true,
+            ]
+            .iter()
+            .copied(),
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
+
+    let new_dev = edge_trigger_capture_dev.transition(&clocks.tc4_tc5(&gclk0).unwrap());
+
+    let _result = new_dev
+        .unwrap()
+        .trigger(
+            [
+                true, true, true, true, false, true, false, true, false, false, true, false, false,
+                true, true, true,
+            ]
+            .iter()
+            .copied(),
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap();
 
     hprintln!("main:: loop{} start:").ok();
 
     loop {
-        let _ = boiler_controller.process().await.unwrap();
-        //  let _result = edge_trigger_capture_dev
-        //      .trigger(
-        //          [
-        //              true, true, true, true, false, true, false, true, false, false, true, false,
-        //              false, true, true, true,
-        //          ]
-        //          .iter()
-        //          .copied(),
-        //          Duration::from_millis(100),
-        //      )
-        //      .await
-        //      .unwrap();
+        //  let _ = boiler_controller.process().await.unwrap();
+
         user_led.toggle().unwrap();
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
         //      //  pwm4.set_duty(max_duty / 8);
