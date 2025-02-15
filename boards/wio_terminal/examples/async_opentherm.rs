@@ -70,6 +70,14 @@ atsamd_hal::bind_interrupts!(struct Irqs {
 atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
     DMAC: [DMAC_0, DMAC_1, DMAC_2, DMAC_OTHER] => atsamd_hal::dmac::InterruptHandler;
 });
+ 
+trait OtMode{}
+struct NoneT{}
+struct OtTx{}
+struct OtRx{}
+impl OtMode for OtTx{}
+impl OtMode for OtRx{}
+impl OtMode for NoneT{}
 
 #[cfg(feature = "use_opentherm")]
 #[embassy_executor::task]
@@ -80,6 +88,7 @@ mod boiler_implementation {
     use crate::dmac::ReadyFuture;
     use crate::hal::pwm_wg::PwmWg4Future;
     use atsamd_hal::gpio::Alternate;
+    use atsamd_hal::pac::gclk::genctrl::OeR;
     use core::marker::PhantomData;
 
     use super::*;
@@ -95,6 +104,7 @@ mod boiler_implementation {
     pub(super) struct AtsamdEdgeTriggerCapture<
         'a,
         D: dmac::AnyChannel<Status = ReadyFuture>,
+        M: OtMode = NoneT,
         const N: usize = VEC_SIZE_CAPTURE,
     > {
         tx_pin: Option<GpioPin<PB09, Alternate<E>>>,
@@ -104,9 +114,140 @@ mod boiler_implementation {
         dma: PhantomData<D>,
         rx_resource_holder: Option<ResourceHolder<D>>,
         mclk: &'a mut Mclk,
+        mode: PhantomData<M>,
     }
 
-    impl<'a, D> AtsamdEdgeTriggerCapture<'a, D>
+    impl<'a, D> AtsamdEdgeTriggerCapture<'a, D, OtTx, VEC_SIZE_CAPTURE>
+    where 
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
+        pub fn new_with_default(
+            pin_tx: GpioPin<PB09, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PushPullOutput>,
+            tc4_timer: pac::Tc4,
+            mclk: &'a mut Mclk,
+            tc4_tc5_clock: &Tc4Tc5Clock,
+            dma_channel: D,
+        ) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, VEC_SIZE_CAPTURE> {
+            let pwm_tx_pin = pin_tx.into_alternate::<E>();
+
+            let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
+                tc4_tc5_clock,
+                Hertz::from_raw(32),
+                tc4_timer,
+                TC4Pinout::Pb9(pwm_tx_pin),
+                mclk,
+            )
+            .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
+                                            // just for prototyping
+            Self {
+                tx_pin: None,
+                rx_pin: Some(pin_rx),
+                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+                pwm: Some(pwm4),
+                dma: PhantomData,
+                rx_resource_holder: None,
+                mclk: mclk,
+                mode: PhantomData,
+            }
+        }
+    }
+
+    //  impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
+    //  where 
+    //      D: dmac::AnyChannel<Status = ReadyFuture>,
+    //  {
+    //      //  pub fn transition_to_rx(self, tc4_tc5_clock: &Tc4Tc5Clock) -> AtsamdEdgeTriggerCapture<'a, D, OtRx, N> {
+    //      //      let (pin_tx, pin_rx, pwm) = (
+    //      //          self.tx_pin.unwrap(),
+    //      //          self.rx_pin.unwrap(),
+    //      //          self.pwm.unwrap(),
+    //      //      );
+    //      //      let (dma, tc4_timer, _d) = pwm.decompose();
+    //      //      Some(Self::new(
+    //      //          pin_tx.into(),
+    //      //          pin_rx,
+    //      //          tc4_timer,
+    //      //          self.mclk,
+    //      //          tc4_tc5_clock,
+    //      //          dma,
+    //      //      ))
+    //      //  }
+    //  }
+
+    impl <'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
+    where 
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
+        //  Starting with TX as the boiler controller is more common and uses the TX command first
+        pub fn new(
+            pin_tx: GpioPin<PB09, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PushPullOutput>,
+            tc4_timer: pac::Tc4,
+            mclk: &'a mut Mclk,
+            tc4_tc5_clock: &Tc4Tc5Clock,
+            dma_channel: D,
+        ) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, N> {
+            let pwm_tx_pin = pin_tx.into_alternate::<E>();
+
+            let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
+                tc4_tc5_clock,
+                Hertz::from_raw(32),
+                tc4_timer,
+                TC4Pinout::Pb9(pwm_tx_pin),
+                mclk,
+            )
+            .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
+                                            // just for prototyping
+            Self {
+                tx_pin: None,
+                rx_pin: Some(pin_rx),
+                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+                pwm: Some(pwm4),
+                dma: PhantomData,
+                rx_resource_holder: None,
+                mclk: mclk,
+                mode: PhantomData,
+            }
+        }
+        pub fn transition_to_rx(self, tc4_tc5_clock: &Tc4Tc5Clock ) -> Option<AtsamdEdgeTriggerCapture<'a, D, OtRx>> {
+            let (pin_tx, pin_rx, pwm) = (
+                self.tx_pin.unwrap(),
+                self.rx_pin.unwrap(),
+                self.pwm.unwrap(),
+            );
+            let (dma, tc4_timer, _d) = pwm.decompose();
+            Some(AtsamdEdgeTriggerCapture::<'a, D, OtRx>::new(
+                pin_tx.into(),
+                pin_rx,
+                tc4_timer,
+                self.mclk,
+                tc4_tc5_clock,
+                dma,
+            ))
+        }
+
+        pub fn transition(self, tc4_tc5_clock: &Tc4Tc5Clock,) -> Option<AtsamdEdgeTriggerCapture<'a, D, OtTx>> {
+            let (pin_tx, pin_rx, pwm) = (
+                self.tx_pin.unwrap(),
+                self.rx_pin.unwrap(),
+                self.pwm.unwrap(),
+            );
+            let (dma, tc4_timer, _d) = pwm.decompose();
+            todo!()
+            //  Some(Self::new(
+            //      pin_tx.into(),
+            //      pin_rx,
+            //      tc4_timer,
+            //      self.mclk,
+            //      tc4_tc5_clock,
+            //      dma,
+            //  ))
+        }
+
+    }
+
+    impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -137,10 +278,10 @@ mod boiler_implementation {
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
+                mode: PhantomData,
             }
         }
-
-        pub fn transition(self, tc4_tc5_clock: &Tc4Tc5Clock,) -> Option<Self> {
+        pub fn transition_to_tx(self, tc4_tc5_clock: &Tc4Tc5Clock ) -> Option<Self> {
             let (pin_tx, pin_rx, pwm) = (
                 self.tx_pin.unwrap(),
                 self.rx_pin.unwrap(),
@@ -156,25 +297,31 @@ mod boiler_implementation {
                 dma,
             ))
         }
+    }
 
-        pub fn new_for_rx(
-            pin_tx: GpioPin<PB09, PushPullOutput>,
-            pin_rx: GpioPin<PB08, PushPullOutput>,
-            tc4_timer: pac::Tc4,
-            mclk: &'a mut Mclk,
-            tc4_tc5_clock: &Tc4Tc5Clock,
-            dma_channel: D,
-        ) -> Self {
-            Self {
-                tx_pin: Some(pin_tx.into()),
-                rx_pin: Some(pin_rx),
-                tx_init_duty_value: 0xff,
-                pwm: None,
-                dma: PhantomData,
-                rx_resource_holder: None,
-                mclk: mclk,
-            }
-        }
+    impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
+    where
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
+
+        ///  pub fn new_for_rx(
+        ///      pin_tx: GpioPin<PB09, PushPullOutput>,
+        ///      pin_rx: GpioPin<PB08, PushPullOutput>,
+        ///      tc4_timer: pac::Tc4,
+        ///      mclk: &'a mut Mclk,
+        ///      tc4_tc5_clock: &Tc4Tc5Clock,
+        ///      dma_channel: D,
+        ///  ) -> Self {
+        ///      Self {
+        ///          tx_pin: Some(pin_tx.into()),
+        ///          rx_pin: Some(pin_rx),
+        ///          tx_init_duty_value: 0xff,
+        ///          pwm: None,
+        ///          dma: PhantomData,
+        ///          rx_resource_holder: None,
+        ///          mclk: mclk,
+        ///      }
+        ///  }
 
         fn decompose(self) -> (D, pac::Tc4, TC4Pinout<PB09>) {
             todo!()
@@ -189,13 +336,14 @@ mod boiler_implementation {
 
         pub fn transition_to_rx(self, channel: D, tc4: pac::Tc4, tc4_pinout: TC4Pinout<PB09>) {
             //  TODO: Here we construct and return the receiver type level struct. Shall be
-            //  returned by ownning
+            //  returned by owning
             todo!();
             //  self.rx_pin;
         }
     }
 
-    impl<D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'_, D, N>
+    // impl<'a, D, M, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
+    impl<'a, D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -204,32 +352,36 @@ mod boiler_implementation {
             iterator: impl Iterator<Item = bool>,
             period: core::time::Duration,
         ) -> Result<(), TriggerError> {
-            let mut source: [u8; N] = [self.tx_init_duty_value; N];
-            for (idx, value) in iterator.enumerate() {
-                if idx >= N {
-                    break;
+            match self.pwm.as_mut() {
+                Some(pwm) => {
+                    let mut source: [u8; N] = [self.tx_init_duty_value; N];
+                    for (idx, value) in iterator.enumerate() {
+                        if idx >= N {
+                            break;
+                        }
+                        //  TODO: Implement configurable idle bus state level
+                        let level = if value { 0xffu8 } else { 0x00u8 };
+                        source[idx] = level;
+                    }
+                    //  return:
+                    //  TODO: Actually use the period to set the PWM frequency
+                    pwm.start_regular_pwm(self.tx_init_duty_value);
+                    let dma_future = self
+                        .pwm
+                        .as_mut()
+                        .unwrap() /* TODO: remove runtime panic */
+                        .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
+                    dma_future.await.map_err(|_| TriggerError::GenericError)
                 }
-                //  TODO: Implement configurable idle bus state level
-                let level = if value { 0xffu8 } else { 0x00u8 };
-                source[idx] = level;
-            }
-            //  return:
-            if let Some(pwm) = self.pwm.as_mut() {
-                //  TODO: Actually use the period to set the PWM frequency
-                pwm.start_regular_pwm(self.tx_init_duty_value);
-                let dma_future = self
-                    .pwm
-                    .as_mut()
-                    .unwrap() /* TODO: remove runtime panic */
-                    .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
-                dma_future.await.map_err(|_| TriggerError::GenericError)
-            } else {
-                Err(TriggerError::GenericError)
+                None => {
+                    return Err(TriggerError::GenericError);
+                }
             }
         }
+
     }
 
-    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'_, D>
+    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'_, D, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -257,10 +409,13 @@ mod boiler_implementation {
         }
     }
 
-    impl<D> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<'_, D> where
-        D: dmac::AnyChannel<Status = ReadyFuture>
-    {
-    }
+    //impl<'a, D, M, const N: usize> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<'_, D, M, N>
+    //where
+    //    D: dmac::AnyChannel<Status = ReadyFuture>,
+    //    M: OtMode,
+    //{
+    //}
+
 }
 
 #[inline]
@@ -383,47 +538,48 @@ async fn main(spawner: embassy_executor::Spawner) {
         });
 
     #[cfg(feature = "use_opentherm")]
-    let mut edge_trigger_capture_dev = boiler_implementation::AtsamdEdgeTriggerCapture::new(
-        pwm_tx_pin,
-        pwm_rx_pin,
-        tc4_timer,
-        &mut peripherals.mclk,
-        &clocks.tc4_tc5(&gclk0).unwrap(),
-        channel0,
+    let mut edge_trigger_capture_dev =
+        boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
+            pwm_tx_pin,
+            pwm_rx_pin,
+            tc4_timer,
+            &mut peripherals.mclk,
+            &clocks.tc4_tc5(&gclk0).unwrap(),
+            channel0,
     );
 
     let _time_driver = boiler_implementation::AtsamdTimeDriver::new();
     //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
     //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
 
-    let _result = edge_trigger_capture_dev
-        .trigger(
-            [
-                true, true, true, true, false, true, false, true, false, false, true, false, false,
-                true, true, true,
-            ]
-            .iter()
-            .copied(),
-            Duration::from_millis(100),
-        )
-        .await
-        .unwrap();
+    // let _result = edge_trigger_capture_dev
+    //     .trigger(
+    //         [
+    //             true, true, true, true, false, true, false, true, false, false, true, false, false,
+    //             true, true, true,
+    //         ]
+    //         .iter()
+    //         .copied(),
+    //         Duration::from_millis(100),
+    //     )
+    //     .await
+    //     .unwrap();
 
-    let new_dev = edge_trigger_capture_dev.transition(&clocks.tc4_tc5(&gclk0).unwrap());
+    // let new_dev = edge_trigger_capture_dev.transition(&clocks.tc4_tc5(&gclk0).unwrap());
 
-    let _result = new_dev
-        .unwrap()
-        .trigger(
-            [
-                true, true, true, true, false, true, false, true, false, false, true, false, false,
-                true, true, true,
-            ]
-            .iter()
-            .copied(),
-            Duration::from_millis(100),
-        )
-        .await
-        .unwrap();
+    // let _result = new_dev
+    //     .unwrap()
+    //     .trigger(
+    //         [
+    //             true, true, true, true, false, true, false, true, false, false, true, false, false,
+    //             true, true, true,
+    //         ]
+    //         .iter()
+    //         .copied(),
+    //         Duration::from_millis(100),
+    //     )
+    //     .await
+    //     .unwrap();
 
     hprintln!("main:: loop{} start:").ok();
 
