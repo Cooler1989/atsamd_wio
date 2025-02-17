@@ -348,11 +348,11 @@ mod boiler_implementation {
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
         async fn trigger(
-            &mut self,
+            mut self,
             iterator: impl Iterator<Item = bool>,
             period: core::time::Duration,
-        ) -> Result<(), TriggerError> {
-            match self.pwm.as_mut() {
+        ) -> (Self, Result<(), TriggerError>) {
+            let response = match self.pwm.as_mut() {
                 Some(pwm) => {
                     let mut source: [u8; N] = [self.tx_init_duty_value; N];
                     for (idx, value) in iterator.enumerate() {
@@ -374,9 +374,10 @@ mod boiler_implementation {
                     dma_future.await.map_err(|_| TriggerError::GenericError)
                 }
                 None => {
-                    return Err(TriggerError::GenericError);
+                    Err(TriggerError::GenericError)
                 }
-            }
+            };
+            (self, response)
         }
 
     }
@@ -386,10 +387,10 @@ mod boiler_implementation {
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
         async fn start_capture(
-            &mut self,
+            mut self,
             timeout_inactive_capture: core::time::Duration,
             timeout_till_active_capture: core::time::Duration,
-        ) -> Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError> {
+        ) -> (Self, Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>) {
             todo!()
         }
     }
