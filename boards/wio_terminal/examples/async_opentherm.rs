@@ -281,14 +281,15 @@ mod boiler_implementation {
                 mode: PhantomData,
             }
         }
-        pub fn transition_to_tx(self, tc4_tc5_clock: &Tc4Tc5Clock ) -> Option<Self> {
+        pub fn transition_to_tx(self, tc4_tc5_clock: &Tc4Tc5Clock ) -> Option<AtsamdEdgeTriggerCapture<'a, D, OtTx>> {
             let (pin_tx, pin_rx, pwm) = (
                 self.tx_pin.unwrap(),
                 self.rx_pin.unwrap(),
                 self.pwm.unwrap(),
             );
             let (dma, tc4_timer, _d) = pwm.decompose();
-            Some(Self::new(
+            
+            Some(AtsamdEdgeTriggerCapture::<'a, D, OtTx>::new(
                 pin_tx.into(),
                 pin_rx,
                 tc4_timer,
@@ -553,34 +554,36 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
     //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
 
-    // let _result = edge_trigger_capture_dev
-    //     .trigger(
-    //         [
-    //             true, true, true, true, false, true, false, true, false, false, true, false, false,
-    //             true, true, true,
-    //         ]
-    //         .iter()
-    //         .copied(),
-    //         Duration::from_millis(100),
-    //     )
-    //     .await
-    //     .unwrap();
+    let (device, result) = edge_trigger_capture_dev
+        .trigger(
+            [
+                true, true, true, true, false, true, false, true, false, false, true, false, false,
+                true, true, true,
+            ]
+            .iter()
+            .copied(),
+            Duration::from_millis(100),
+        )
+        .await;
+    result.unwrap();
 
-    // let new_dev = edge_trigger_capture_dev.transition(&clocks.tc4_tc5(&gclk0).unwrap());
+    let device = device.transition_to_rx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
 
-    // let _result = new_dev
-    //     .unwrap()
-    //     .trigger(
-    //         [
-    //             true, true, true, true, false, true, false, true, false, false, true, false, false,
-    //             true, true, true,
-    //         ]
-    //         .iter()
-    //         .copied(),
-    //         Duration::from_millis(100),
-    //     )
-    //     .await
-    //     .unwrap();
+    let (device, _result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
+
+    let device = device.transition_to_tx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
+
+    let (device, _result ) = device
+        .trigger(
+            [
+                true, true, true, true, false, true, false, true, false, false, true, false, false,
+                true, true, true,
+            ]
+            .iter()
+            .copied(),
+            Duration::from_millis(100),
+        )
+        .await;
 
     hprintln!("main:: loop{} start:").ok();
 
