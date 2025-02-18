@@ -29,6 +29,7 @@ use hal::{
     eic::{Eic, Sense},
     gpio::{Pin as GpioPin, PullUpInterrupt},
     pwm::{Pwm4, TC4Pinout},
+    timer_capture_waveform::{TimerCapture4,TimerCapture4Future},
     pwm_wg::PwmWg4,
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
@@ -111,6 +112,7 @@ mod boiler_implementation {
         rx_pin: Option<GpioPin<PB08, PushPullOutput>>,
         tx_init_duty_value: u8,
         pwm: Option<PwmWg4Future<PB09, D>>, // one alternative when TX operation
+        capture_device:Option<TimerCapture4Future<PB08, D>>, // one alternative when RX operation
         dma: PhantomData<D>,
         rx_resource_holder: Option<ResourceHolder<D>>,
         mclk: &'a mut Mclk,
@@ -145,6 +147,7 @@ mod boiler_implementation {
                 rx_pin: Some(pin_rx),
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: Some(pwm4),
+                capture_device: None,
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
@@ -204,6 +207,7 @@ mod boiler_implementation {
                 rx_pin: Some(pin_rx),
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: Some(pwm4),
+                capture_device: None,
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
@@ -259,22 +263,23 @@ mod boiler_implementation {
             tc4_tc5_clock: &Tc4Tc5Clock,
             dma_channel: D,
         ) -> Self {
-            let pwm_tx_pin = pin_tx.into_alternate::<E>();
+            let pwm_rx_pin = pin_rx.into_alternate::<E>();
 
-            let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
+            let timer_capture_4 = TimerCapture4::<PB08>::new_timer_capture(
                 tc4_tc5_clock,
                 Hertz::from_raw(32),
                 tc4_timer,
-                TC4Pinout::Pb9(pwm_tx_pin),
+                TC4Pinout::Pb8(pwm_rx_pin),
                 mclk,
             )
             .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
                                             // just for prototyping
             Self {
-                tx_pin: None,
-                rx_pin: Some(pin_rx),
+                tx_pin: Some(pin_tx.into()),
+                rx_pin: None,
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-                pwm: Some(pwm4),
+                pwm: None,
+                capture_device: Some(timer_capture_4),  //  TODO: Implement the capture device
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
@@ -304,26 +309,6 @@ mod boiler_implementation {
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
-
-        ///  pub fn new_for_rx(
-        ///      pin_tx: GpioPin<PB09, PushPullOutput>,
-        ///      pin_rx: GpioPin<PB08, PushPullOutput>,
-        ///      tc4_timer: pac::Tc4,
-        ///      mclk: &'a mut Mclk,
-        ///      tc4_tc5_clock: &Tc4Tc5Clock,
-        ///      dma_channel: D,
-        ///  ) -> Self {
-        ///      Self {
-        ///          tx_pin: Some(pin_tx.into()),
-        ///          rx_pin: Some(pin_rx),
-        ///          tx_init_duty_value: 0xff,
-        ///          pwm: None,
-        ///          dma: PhantomData,
-        ///          rx_resource_holder: None,
-        ///          mclk: mclk,
-        ///      }
-        ///  }
-
         fn decompose(self) -> (D, pac::Tc4, TC4Pinout<PB09>) {
             todo!()
             //  let pwm = self.pwm;
@@ -335,16 +320,10 @@ mod boiler_implementation {
             //  );
         }
 
-        pub fn transition_to_rx(self, channel: D, tc4: pac::Tc4, tc4_pinout: TC4Pinout<PB09>) {
-            //  TODO: Here we construct and return the receiver type level struct. Shall be
-            //  returned by owning
-            todo!();
-            //  self.rx_pin;
-        }
     }
 
     // impl<'a, D, M, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
-    impl<'a, D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
+    impl<D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'_, D, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -410,13 +389,6 @@ mod boiler_implementation {
             todo!()
         }
     }
-
-    //impl<'a, D, M, const N: usize> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCapture<'_, D, M, N>
-    //where
-    //    D: dmac::AnyChannel<Status = ReadyFuture>,
-    //    M: OtMode,
-    //{
-    //}
 
 }
 
@@ -569,7 +541,10 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let device = device.transition_to_rx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
 
-    let (device, _result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
+    let (device, result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
+    if let Ok((level, vector)) = result {
+        hprintln!("Capture finished with: {}", vector.len()).ok();
+    }
 
     let device = device.transition_to_tx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
 

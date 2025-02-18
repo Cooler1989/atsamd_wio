@@ -93,6 +93,8 @@ impl_tc_pinout!(TC3Pinout: [
 impl_tc_pinout!(TC4Pinout: [
     #[hal_cfg("pa23")]
     (Pa23, PA23),
+    #[hal_cfg("pb08")]
+    (Pb8, PB08),
     #[hal_cfg("pb09")]
     (Pb9, PB09),
     #[hal_cfg("pb13")]
