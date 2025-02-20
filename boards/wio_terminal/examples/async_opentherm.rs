@@ -526,44 +526,47 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
     //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
 
-    let (device, result) = edge_trigger_capture_dev
-        .trigger(
-            [
-                true, true, true, true, false, true, false, true, false, false, true, false, false,
-                true, true, true,
-            ]
-            .iter()
-            .copied(),
-            Duration::from_millis(100),
-        )
-        .await;
-    result.unwrap();
-
-    let device = device.transition_to_rx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
-
-    let (device, result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
-    if let Ok((level, vector)) = result {
-        hprintln!("Capture finished with: {}", vector.len()).ok();
-    }
-
-    let device = device.transition_to_tx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
-
-    let (device, _result ) = device
-        .trigger(
-            [
-                true, true, true, true, false, true, false, true, false, false, true, false, false,
-                true, true, true,
-            ]
-            .iter()
-            .copied(),
-            Duration::from_millis(100),
-        )
-        .await;
-
     hprintln!("main:: loop{} start:").ok();
 
     loop {
-        //  let _ = boiler_controller.process().await.unwrap();
+
+        let (device, result) = edge_trigger_capture_dev
+            .trigger(
+                [
+                    true, true, true, true, false, true, false, true, false, false, true, false, false,
+                    true, true, true,
+                ]
+                .iter()
+                .copied(),
+                Duration::from_millis(100),
+            )
+            .await;
+        result.unwrap();
+
+        let device = device.transition_to_rx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
+
+        //  let (device, result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
+        //  if let Ok((level, vector)) = result {
+        //      hprintln!("Capture finished with: {}", vector.len()).ok();
+        //  }
+
+        let device = device.transition_to_tx(&clocks.tc4_tc5(&gclk0).unwrap()).unwrap();
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+
+        let (device, _result ) = device
+            .trigger(
+                [
+                    true, true, true, true, false, true, false, true, false, false, true, false, false,
+                    true, true, true,
+                ]
+                .iter()
+                .copied(),
+                Duration::from_millis(100),
+            )
+            .await;
+
+            edge_trigger_capture_dev = device;
+            //  let _ = boiler_controller.process().await.unwrap();
 
         user_led.toggle().unwrap();
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
