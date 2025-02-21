@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use boiler_implementation::AtsamdEdgeTriggerCapture;
 use bsp::hal::time::Hertz;
 use core::time::Duration;
 use defmt_rtt as _;
@@ -116,6 +117,7 @@ mod boiler_implementation {
         dma: PhantomData<D>,
         rx_resource_holder: Option<ResourceHolder<D>>,
         mclk: &'a mut Mclk,
+        tc4_tc5_clock: &'static Tc4Tc5Clock,
         mode: PhantomData<M>,
     }
 
@@ -151,6 +153,7 @@ mod boiler_implementation {
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
+                tc4_tc5_clock: tc4_tc5_clock,
                 mode: PhantomData,
             }
         }
@@ -211,6 +214,7 @@ mod boiler_implementation {
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
+                tc4_tc5_clock: tc4_tc5_clock,
                 mode: PhantomData,
             }
         }
@@ -231,24 +235,69 @@ mod boiler_implementation {
             ))
         }
 
-        pub fn transition(self, tc4_tc5_clock: &Tc4Tc5Clock,) -> Option<AtsamdEdgeTriggerCapture<'a, D, OtTx>> {
+    }
+
+    impl <'a, D, const N: usize> EdgeTriggerTransitiveToCaptureCapable<N> for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
+    where 
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
+        type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, OtRx, N>;
+        fn transition_to_capture_capable_device(self) -> Self::CaptureDevice {
             let (pin_tx, pin_rx, pwm) = (
                 self.tx_pin.unwrap(),
                 self.rx_pin.unwrap(),
                 self.pwm.unwrap(),
             );
             let (dma, tc4_timer, _d) = pwm.decompose();
-            todo!()
-            //  Some(Self::new(
-            //      pin_tx.into(),
-            //      pin_rx,
-            //      tc4_timer,
-            //      self.mclk,
-            //      tc4_tc5_clock,
-            //      dma,
-            //  ))
+            AtsamdEdgeTriggerCapture::<'a, D, OtRx, N>::new(
+                pin_tx.into(),
+                pin_rx,
+                tc4_timer,
+                self.mclk,
+                self.tc4_tc5_clock,
+                dma,
+            )
         }
+        //  fn _transition_to_rx_d(self, tc4_tc5_clock: &Tc4Tc5Clock ) -> Option<AtsamdEdgeTriggerCapture<'a, D, OtRx>> {
+        //      let (pin_tx, pin_rx, pwm) = (
+        //          self.tx_pin.unwrap(),
+        //          self.rx_pin.unwrap(),
+        //          self.pwm.unwrap(),
+        //      );
+        //      let (dma, tc4_timer, _d) = pwm.decompose();
+        //      Some(AtsamdEdgeTriggerCapture::<'a, D, OtRx>::new(
+        //          pin_tx.into(),
+        //          pin_rx,
+        //          tc4_timer,
+        //          self.mclk,
+        //          tc4_tc5_clock,
+        //          dma,
+        //      ))
+        //  }
+    }
 
+    impl<'a, D, const N: usize> EdgeCaptureTransitiveToTriggerCapable<N> for AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
+    where
+        D: dmac::AnyChannel<Status = ReadyFuture>,
+    {
+        type TriggerDevice = AtsamdEdgeTriggerCapture<'a, D, OtTx, N>;
+        fn transition_to_trigger_capable_device(self) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, N> {
+            let (pin_tx, pin_rx, pwm) = (
+                self.tx_pin.unwrap(),
+                self.rx_pin.unwrap(),
+                self.pwm.unwrap(),
+            );
+            let (dma, tc4_timer, _d) = pwm.decompose();
+            
+            AtsamdEdgeTriggerCapture::<'a, D, OtTx, N>::new(
+                pin_tx.into(),
+                pin_rx,
+                tc4_timer,
+                self.mclk,
+                self.tc4_tc5_clock,
+                dma,
+            )
+        }
     }
 
     impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
@@ -283,6 +332,7 @@ mod boiler_implementation {
                 dma: PhantomData,
                 rx_resource_holder: None,
                 mclk: mclk,
+                tc4_tc5_clock: tc4_tc5_clock,
                 mode: PhantomData,
             }
         }
@@ -323,7 +373,7 @@ mod boiler_implementation {
     }
 
     // impl<'a, D, M, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
-    impl<D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'_, D, OtTx, N>
+    impl<'a, D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -362,7 +412,7 @@ mod boiler_implementation {
 
     }
 
-    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'_, D, OtRx, N>
+    impl<'a, D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -390,7 +440,69 @@ mod boiler_implementation {
         }
     }
 
+
+struct AtsamdEdgeTriggerCaptureRuntime <
+    'a,
+    D: dmac::AnyChannel<Status = ReadyFuture>,
+    const N: usize = VEC_SIZE_CAPTURE,
+> {
+    dev_tx: AtsamdEdgeTriggerCapture<'a, D, OtTx, N>,
+    dev_rx: AtsamdEdgeTriggerCapture<'a, D, OtRx, N>,
 }
+
+impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCaptureRuntime<'_, D, N>
+where
+    D: dmac::AnyChannel<Status = ReadyFuture>,
+{
+    async fn start_capture(
+        mut self,
+        timeout_inactive_capture: core::time::Duration,
+        timeout_till_active_capture: core::time::Duration,
+    ) -> (Self, Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>) {
+        todo!()
+    }
+}
+
+trait EdgeTriggerTransitiveToCaptureCapable<const N:usize>: EdgeTriggerInterface {
+    //  if the driver is able to transition to both RX and TX mode than this trait can be used to provide transitionio and implement both interfaces for us
+    type CaptureDevice: EdgeCaptureTransitiveToTriggerCapable<N>;
+    fn transition_to_capture_capable_device(self) -> Self::CaptureDevice;
+}
+
+trait EdgeCaptureTransitiveToTriggerCapable<const N:usize>: EdgeCaptureInterface<N> {
+    //  if the driver is able to transition to both RX and TX mode than this trait can be used to provide transitionio and implement both interfaces for us
+    type TriggerDevice: EdgeTriggerTransitiveToCaptureCapable<N>;
+    fn transition_to_trigger_capable_device(self) -> Self::TriggerDevice;
+}
+
+
+//  trait EdgeTriggerAndTransitiveToCaptureCapable: EdgeTriggerTransitiveToCaptureCapable {}
+//  trait EdgeCaptureAndTransisiveToTriggerCapable: EdgeCaptureTransitiveToTriggerCapable {}
+//  
+//  trait OpenThermTransitiveBus {
+//      type EdgeTriggerAndTransitive: EdgeTriggerTransitiveToCaptureCapable;
+//      type EdgeCaptureAndTransisive: EdgeCaptureTransitiveToTriggerCapable;
+//  }
+
+struct GlueBus<Tx, Rx> {
+    tx: Tx,
+    rx: Rx,
+}
+
+//  impl EdgeCaptureInterface for OpenThermTransitiveBus {
+
+}
+
+//  dev1 : EdgeTriggerTransitive : EdgeTriggerInterface
+//  dev2 : EdgeCaptureTransitive : EdgeCaptureInterface
+
+//  impl<D> OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCaptureRuntime<'_, D, VEC_SIZE_CAPTURE> 
+//  where 
+//      D: dmac::AnyChannel<Status = ReadyFuture>,
+//  {
+//  }
+
+//  }
 
 #[inline]
 pub fn check_and_clear_interrupts(flags: InterruptFlags) -> InterruptFlags {
