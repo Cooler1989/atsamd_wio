@@ -174,7 +174,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 */
 impl<I: PinId> $TYPE<I> {
     pub fn new_timer_capture(
-        clock: &clock::$clock,
+        clock_freq: Hertz,
         freq: Hertz,
         tc: crate::pac::$TC,
         pinout: $pinout<I>,
@@ -185,7 +185,7 @@ impl<I: PinId> $TYPE<I> {
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
 
         //  write(|w| w.ccbuf().bits(duty as u8));
-        let params = TimerParams::new(freq.convert(), clock.freq());
+        let params = TimerParams::new(freq.convert(), clock_freq);
         mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
         count.ctrla().write(|w| w.swrst().set_bit());
         while count.ctrla().read().bits() & 1 != 0 {}
@@ -218,7 +218,7 @@ impl<I: PinId> $TYPE<I> {
         while count.syncbusy().read().cc1().bit_is_set() {}
 
         Self {
-            clock_freq: clock.freq(),
+            clock_freq: clock_freq,
             tc,
             pinout,
         }
