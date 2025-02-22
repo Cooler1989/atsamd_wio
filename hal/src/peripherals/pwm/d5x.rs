@@ -48,6 +48,9 @@ macro_rules! impl_tc_pinout {
                     let _pin = pin.into().into_alternate();
                     Self { _pin }
                 }
+                pub fn collapse(self) -> Pin<$Id, AlternateE> {
+                    self._pin
+                }
             }
         )+
     };

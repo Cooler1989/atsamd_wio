@@ -163,28 +163,6 @@ mod boiler_implementation {
         }
     }
 
-    //  impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
-    //  where
-    //      D: dmac::AnyChannel<Status = ReadyFuture>,
-    //  {
-    //      //  pub fn transition_to_rx(self, tc4_tc5_clock: &Tc4Tc5Clock) -> AtsamdEdgeTriggerCapture<'a, D, OtRx, N> {
-    //      //      let (pin_tx, pin_rx, pwm) = (
-    //      //          self.tx_pin.unwrap(),
-    //      //          self.rx_pin.unwrap(),
-    //      //          self.pwm.unwrap(),
-    //      //      );
-    //      //      let (dma, tc4_timer, _d) = pwm.decompose();
-    //      //      Some(Self::new(
-    //      //          pin_tx.into(),
-    //      //          pin_rx,
-    //      //          tc4_timer,
-    //      //          self.mclk,
-    //      //          tc4_tc5_clock,
-    //      //          dma,
-    //      //      ))
-    //      //  }
-    //  }
-
     impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
@@ -231,11 +209,14 @@ mod boiler_implementation {
     {
         type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, OtRx, N>;
         fn transition_to_capture_capable_device(self) -> Self::CaptureDevice {
-            let (pin_tx, pwm) = (self.tx_pin.unwrap(), self.pwm.unwrap());
-            let (dma, tc4_timer, pin) = pwm.decompose();
+            let pwm = self.pwm.unwrap();
+            let (dma, tc4_timer, pinout) = pwm.decompose();
+            let pin_tx = pinout.collapse();
+            let pin_tx = pin_tx.into_push_pull_output();
+
             AtsamdEdgeTriggerCapture::<'a, D, OtRx, N>::new(
                 pin_tx.into(),
-                pin,
+                self.rx_pin.unwrap(),
                 tc4_timer,
                 self.mclk,
                 self.periph_clock_freq,
@@ -251,16 +232,18 @@ mod boiler_implementation {
     {
         type TriggerDevice = AtsamdEdgeTriggerCapture<'a, D, OtTx, N>;
         fn transition_to_trigger_capable_device(self) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, N> {
-            let (pin_tx, pin_rx, pwm) = (
+            let (pin_tx, capture_timer) = (
                 self.tx_pin.unwrap(),
-                self.rx_pin.unwrap(),
-                self.pwm.unwrap(),
+                self.capture_device.unwrap(),
             );
-            let (dma, tc4_timer, _d) = pwm.decompose();
+            let (dma, tc4_timer, pinout_rx) = capture_timer.decompose();
+        //      let (dma, tc4_timer, pinout) = pwm.decompose();
+            let pin_rx = pinout_rx.collapse();
+            let pin_rx = pin_rx.into_pull_up_input();
 
             AtsamdEdgeTriggerCapture::<'a, D, OtTx, N>::new(
                 pin_tx.into(),
-                pin_rx,
+                pin_rx.into(),
                 tc4_timer,
                 self.mclk,
                 self.periph_clock_freq,
@@ -304,23 +287,6 @@ mod boiler_implementation {
                 periph_clock_freq: periph_clock_freq,
                 mode: PhantomData,
             }
-        }
-        pub fn transition_to_tx(self) -> Option<AtsamdEdgeTriggerCapture<'a, D, OtTx>> {
-            let (pin_tx, pin_rx, pwm) = (
-                self.tx_pin.unwrap(),
-                self.rx_pin.unwrap(),
-                self.pwm.unwrap(),
-            );
-            let (dma, tc4_timer, _d) = pwm.decompose();
-
-            Some(AtsamdEdgeTriggerCapture::<'a, D, OtTx>::new(
-                pin_tx.into(),
-                pin_rx,
-                tc4_timer,
-                self.mclk,
-                self.periph_clock_freq,
-                dma,
-            ))
         }
     }
 
@@ -565,7 +531,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     pwm_tx_pin.set_high().unwrap();
 
     let pwm_rx_pin = pins.pb08.into_push_pull_output();
-    // let pwm_tx_pin = pins.pb09.into_alternate::<E>();
+    //  let _pwm_tx_pin = pins.pb09.into_alternate::<E>();
     let tc4_timer = peripherals.tc4;
 
     Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
@@ -625,7 +591,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         //      hprintln!("Capture finished with: {}", vector.len()).ok();
         //  }
 
-        let device = device.transition_to_tx().unwrap();
+        let device = device.transition_to_trigger_capable_device();
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
 
         let (device, _result) = device
