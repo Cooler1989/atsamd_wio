@@ -1,20 +1,20 @@
 use atsamd_hal::clock::GenericClockController;
 use atsamd_hal::ehal::delay::DelayNs;
 //  use atsamd_hal::ehal::digital::v2::OutputPin;
+use atsamd_hal::dmac::DmaController;
 use atsamd_hal::ehal::digital::OutputPin;
 use atsamd_hal::ehal::spi::{
     ErrorKind, ErrorType, Operation as SpiOperation, Phase, Polarity, SpiDevice,
 };
+use atsamd_hal::gpio::Pin;
 use atsamd_hal::pac::{Mclk, Sercom7 as PacSercom7};
 use atsamd_hal::sercom::spi;
+use atsamd_hal::sercom::spi::Spi;
 use atsamd_hal::sercom::{IoSet4, Sercom7};
 use atsamd_hal::time::Hertz;
 use atsamd_hal::typelevel::NoneT;
-use display_interface::{WriteOnlyDataCommand, DisplayError, DataFormat};
+use display_interface::{DataFormat, DisplayError, WriteOnlyDataCommand};
 use ili9341::{DisplaySize240x320, Ili9341, Orientation};
-use atsamd_hal::dmac::DmaController;
-use atsamd_hal::sercom::spi::Spi;
-use atsamd_hal::gpio::Pin;
 
 use super::pins::aliases::*;
 
@@ -57,7 +57,7 @@ enum TemporaryError {}
 
 pub struct SpiDeviceImpl {
     spi: LcdSpi,
-    cs: LcdCs, 
+    cs: LcdCs,
     dc: LcdDc,
 }
 
@@ -66,11 +66,8 @@ impl ErrorType for SpiDeviceImpl {
 }
 
 impl SpiDeviceImpl {
-    fn new(
-        spi: LcdSpi,
-        cs: LcdCs, 
-        dc: LcdDc) -> Self {
-        Self {spi, cs, dc}
+    fn new(spi: LcdSpi, cs: LcdCs, dc: LcdDc) -> Self {
+        Self { spi, cs, dc }
     }
 }
 
@@ -112,13 +109,15 @@ impl WriteOnlyDataCommand for SpiDeviceImpl {
 //  }
 
 impl Display {
-    pub fn new(miso: LcdMisoReset, 
-        mosi: LcdMosiReset, 
-        sck: LcdSckReset, 
-        cs: LcdCsReset, 
-        dc: LcdDcReset, 
-        reset: LcdResetReset, 
-        backlight: LcdBacklightReset) -> Self {
+    pub fn new(
+        miso: LcdMisoReset,
+        mosi: LcdMosiReset,
+        sck: LcdSckReset,
+        cs: LcdCsReset,
+        dc: LcdDcReset,
+        reset: LcdResetReset,
+        backlight: LcdBacklightReset,
+    ) -> Self {
         Self {
             miso,
             mosi,
