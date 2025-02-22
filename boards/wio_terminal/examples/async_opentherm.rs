@@ -113,6 +113,8 @@ mod boiler_implementation {
     > {
         tx_pin: Option<GpioPin<PB09, Alternate<E>>>,
         rx_pin: Option<GpioPin<PB08, PushPullOutput>>,
+
+        //  Pin<PB08, Output<PushPull>>`, found `TC4Pinout<PB09>``
         tx_init_duty_value: u8,
         pwm: Option<PwmWg4Future<PB09, D>>, // one alternative when TX operation
         capture_device: Option<TimerCapture4Future<PB08, D>>, // one alternative when RX operation
@@ -229,15 +231,11 @@ mod boiler_implementation {
     {
         type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, OtRx, N>;
         fn transition_to_capture_capable_device(self) -> Self::CaptureDevice {
-            let (pin_tx, pin_rx, pwm) = (
-                self.tx_pin.unwrap(),
-                self.rx_pin.unwrap(),
-                self.pwm.unwrap(),
-            );
-            let (dma, tc4_timer, _d) = pwm.decompose();
+            let (pin_tx, pwm) = (self.tx_pin.unwrap(), self.pwm.unwrap());
+            let (dma, tc4_timer, pin) = pwm.decompose();
             AtsamdEdgeTriggerCapture::<'a, D, OtRx, N>::new(
                 pin_tx.into(),
-                pin_rx,
+                pin,
                 tc4_timer,
                 self.mclk,
                 self.periph_clock_freq,
