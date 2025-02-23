@@ -81,15 +81,15 @@ pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
 
-    pub fn start_(&mut self, ccx_value: u32) {
+    fn start_capture(&mut self) {
         let count = self.base_pwm.tc.count32();
         count.cc(0).write(|w| unsafe { w.bits(0x00) });
         while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
+        count.cc(1).write(|w| unsafe { w.bits(0x00) });
         while count.syncbusy().read().cc1().bit_is_set() {}
 
         count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
+        count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
 
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
@@ -97,6 +97,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
     pub async fn start_timer_prepare_dma_transfer(&mut self) -> Result<(),DmacError> {
 
+        self.start_capture();
         let count = self.base_pwm.tc.count32();
 
         count.cc(0).write(|w| unsafe { w.bits(0x00) });
@@ -131,22 +132,6 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
         // wait for the settings to be applied
         while count.syncbusy().read().cc0().bit_is_set() {}
-
-        // Disable the timer when DMA transfer is done.
-        //  count.ctrla().modify(|_, w| w.enable().clear_bit());
-        //  while count.syncbusy().read().enable().bit_is_set() {}
-        //  count.ctrla().write(|w| w.swrst().set_bit());
-        //  while count.ctrla().read().bits() & 1 != 0 {}
-
-        //  let Self{base_pwm, _channel} = self;
-        //  let $TYPE{..} = self.base_pwm;
-
-        //  pub struct $TYPE<I: PinId> {
-        //    clock_freq: Hertz,
-        //    tc: crate::pac::$TC,
-        //    pinout: $pinout<I>,
-        //  }
-        // [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>
 
         value_to_return
     }
@@ -225,7 +210,7 @@ impl<I: PinId> $TYPE<I> {
     }
 
     //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
-    pub fn with_dma_channel<CH>(mut self, channel: CH ) -> [<$TYPE Future>]<I, CH>
+    pub fn with_dma_channel<CH>(self, channel: CH ) -> [<$TYPE Future>]<I, CH>
         where
         CH: AnyChannel<Status=ReadyFuture>
     {
