@@ -177,7 +177,7 @@ impl<I: PinId> $TYPE<I> {
         //  let PwmWaveformGeneratorPtr()(pub(in super::super) *mut T);
 
         //  write(|w| w.ccbuf().bits(duty as u8));
-        let params = TimerParams::new(freq.convert(), clock_freq);
+        let _params = TimerParams::new(freq.convert(), clock_freq);
         mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
         count.ctrla().write(|w| w.swrst().set_bit());
         while count.ctrla().read().bits() & 1 != 0 {}

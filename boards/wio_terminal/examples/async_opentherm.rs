@@ -15,7 +15,7 @@ use bsp::pac;
 use bsp::{
     hal,
     hal::gpio::{Output, OutputConfig, Pins, PushPull, PushPullOutput},
-    hal::gpio::{E, PB08, PB09},
+    hal::gpio::{E, PB08, PB09, PA17},
     pin_alias,
 };
 use wio_terminal::prelude::_embedded_hal_PwmPin;
@@ -290,22 +290,6 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
-    where
-        D: dmac::AnyChannel<Status = ReadyFuture>,
-    {
-        fn decompose(self) -> (D, pac::Tc4, TC4Pinout<PB09>) {
-            todo!()
-            //  let pwm = self.pwm;
-            //  let (pin_tx, pin_rx, tc4_timer, pwm) = (
-            //      self.tx_pin.unwrap(),
-            //      self.rx_pin.unwrap(),
-            //      self.tc4_timer,
-            //      self.pwm.unwrap(),
-            //  );
-        }
-    }
-
     // impl<'a, D, M, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
     impl<'a, D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
     where
@@ -356,7 +340,22 @@ mod boiler_implementation {
             Self,
             Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
         ) {
-            todo!()
+            //  TODO: <declare conditions on timer to finish the capture>
+            //  1) Timeout scenario: maybe realized with 32b timer overflow. Will require to set timer overflow event to happen at around 800ms
+            //  2) Correct frame finish detection: implemented with reading the timer counter register value in a loop
+            //  The C++ driver does it by checking number of edges detected to be captured so far by polling in the elements of the DMA buffer array.
+            //  This element could be improved by reading some internal register of DMA that returns this count, as the array itself is borrowed by DMA and Rust would not allow to read it.
+            //  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
+
+            let _result = self.capture_device
+                .as_mut()
+                .unwrap()
+                .start_timer_prepare_dma_transfer()
+                //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
+                .await;
+
+            let mut timestamps = Vec::<core::time::Duration, N>::new();
+            (self, Ok((InitLevel::High, timestamps)))
         }
     }
 
@@ -375,30 +374,30 @@ mod boiler_implementation {
         }
     }
 
-    struct AtsamdEdgeTriggerCaptureRuntime<
-        'a,
-        D: dmac::AnyChannel<Status = ReadyFuture>,
-        const N: usize = VEC_SIZE_CAPTURE,
-    > {
-        dev_tx: AtsamdEdgeTriggerCapture<'a, D, OtTx, N>,
-        dev_rx: AtsamdEdgeTriggerCapture<'a, D, OtRx, N>,
-    }
+    //  struct AtsamdEdgeTriggerCaptureRuntime<
+    //      'a,
+    //      D: dmac::AnyChannel<Status = ReadyFuture>,
+    //      const N: usize = VEC_SIZE_CAPTURE,
+    //  > {
+    //      dev_tx: AtsamdEdgeTriggerCapture<'a, D, OtTx, N>,
+    //      dev_rx: AtsamdEdgeTriggerCapture<'a, D, OtRx, N>,
+    //  }
 
-    impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCaptureRuntime<'_, D, N>
-    where
-        D: dmac::AnyChannel<Status = ReadyFuture>,
-    {
-        async fn start_capture(
-            self,
-            timeout_inactive_capture: core::time::Duration,
-            timeout_till_active_capture: core::time::Duration,
-        ) -> (
-            Self,
-            Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
-        ) {
-            todo!()
-        }
-    }
+    //  impl<D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCaptureRuntime<'_, D, N>
+    //  where
+    //      D: dmac::AnyChannel<Status = ReadyFuture>,
+    //  {
+    //      async fn start_capture(
+    //          self,
+    //          timeout_inactive_capture: core::time::Duration,
+    //          timeout_till_active_capture: core::time::Duration,
+    //      ) -> (
+    //          Self,
+    //          Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
+    //      ) {
+    //          todo!()
+    //      }
+    //  }
 
     //  trait EdgeTriggerTransitiveToCaptureCapable<const N:usize>: EdgeTriggerInterface {
     //      //  if the driver is able to transition to both RX and TX mode than this trait can be used to provide transitionio and implement both interfaces for us
@@ -445,6 +444,63 @@ pub fn check_and_clear_interrupts(flags: InterruptFlags) -> InterruptFlags {
     InterruptFlags::from_bytes([cleared])
 }
 
+#[embassy_executor::task]
+async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
+    loop {
+        toggle_pin.toggle().unwrap();
+        Mono::delay(MillisDuration::<u32>::from_ticks(100).convert()).await;
+    }
+}   
+
+#[embassy_executor::task]
+async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
+{
+    let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
+    //  let mut value_cc1 = 0x00u8;
+    loop {
+        //  Read this value:
+        //  let vcc1 = tc4_readonly.count8().cc(1).read().bits();
+        //  if vcc1 != value_cc1 {
+        //      hprintln!("tc4.cc1:0x{:08X}", vcc1).ok();
+        //      value_cc1 = vcc1;
+        //  }
+
+        //  uart_tx.write(b"Hello, world!").await.unwrap();
+        //  defmt::info!("Sent 10 bytes");
+
+        //  let mut delay = Delay::new(core.SYST, &mut clocks);
+        { //  Read counter one by one to see if it is running:
+            let count32 = tc4_readonly
+                .count32();
+            let _ = count32 .ctrlbset() .write(|w| w.cmd().readsync());
+            let cnt_value = count32.count().read().bits();
+            let _ = count32
+                .ctrlbset()
+                .write(|w| w.cmd().readsync());
+            let cn2_value = count32
+                .count().read().bits();
+            hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+        }
+
+        //  hprintln!(
+        //      "tc4int:0x{:08X}, cc1:0x{:08X}",
+        //      tc4_readonly.count8().intflag().read().bits(),
+        //      tc4_readonly.count8().cc(1).read().bits()
+        //  )
+        //  .ok();
+        //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
+        //  hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+
+        //  let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
+        //  if check_and_clear_interrupts(flags_to_check).ovf() {
+        //      //  hprintln!("Overflow detected").ok();
+        //  }
+
+        //  delay.delay_ms(200u16);
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+    }
+}
 #[embassy_executor::task]
 async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
 {
@@ -540,6 +596,8 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut user_led: UserLed = pins.pa15.into();
     user_led.toggle().unwrap();
 
+    spawner.spawn(print_capture_timer_state_task()).unwrap();
+
     //  DMA setup:
     let mut source = [0xffu8; 65];
     //  for (index, value) in source.iter_mut().enumerate() {
@@ -568,6 +626,12 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
     //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
 
+    //  Driver bringup temporary code:
+    //  Idea is to configure additional PIN and connect it to the TC4 timer to capture the signal
+    //  Pin toggle can be done in independent task
+    let dev_dependency_toggling_pin: GpioPin<PA17, Output<PushPull>> = pins.pa17.into_push_pull_output();
+    spawner.spawn(toggle_pin_task(dev_dependency_toggling_pin)).unwrap();
+
     hprintln!("main:: loop{} start:").ok();
 
     loop {
@@ -586,10 +650,10 @@ async fn main(spawner: embassy_executor::Spawner) {
 
         let device = device.transition_to_capture_capable_device();
 
-        //  let (device, result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
-        //  if let Ok((level, vector)) = result {
-        //      hprintln!("Capture finished with: {}", vector.len()).ok();
-        //  }
+        let (device, result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
+        if let Ok((level, vector)) = result {
+            hprintln!("Capture finished with: {}", vector.len()).ok();
+        }
 
         let device = device.transition_to_trigger_capable_device();
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
