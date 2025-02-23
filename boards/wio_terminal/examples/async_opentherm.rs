@@ -90,7 +90,7 @@ async fn boiler_task() {}
 mod boiler_implementation {
     use crate::dmac::ReadyFuture;
     use crate::hal::pwm_wg::PwmWg4Future;
-    use atsamd_hal::gpio::Alternate;
+    use atsamd_hal::gpio::{Alternate, PullUpInput};
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
     use core::marker::PhantomData;
@@ -112,7 +112,7 @@ mod boiler_implementation {
         const N: usize = VEC_SIZE_CAPTURE,
     > {
         tx_pin: Option<GpioPin<PB09, Alternate<E>>>,
-        rx_pin: Option<GpioPin<PB08, PushPullOutput>>,
+        rx_pin: Option<GpioPin<PB08, PullUpInput>>,
 
         //  Pin<PB08, Output<PushPull>>`, found `TC4Pinout<PB09>``
         tx_init_duty_value: u8,
@@ -131,7 +131,7 @@ mod boiler_implementation {
     {
         pub fn new_with_default(
             pin_tx: GpioPin<PB09, PushPullOutput>,
-            pin_rx: GpioPin<PB08, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PullUpInput>,
             tc4_timer: pac::Tc4,
             mclk: &'a mut Mclk,
             tc4_tc5_clock: &Tc4Tc5Clock,
@@ -170,7 +170,7 @@ mod boiler_implementation {
         //  Starting with TX as the boiler controller is more common and uses the TX command first
         pub fn new(
             pin_tx: GpioPin<PB09, PushPullOutput>,
-            pin_rx: GpioPin<PB08, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PullUpInput>,
             tc4_timer: pac::Tc4,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
@@ -258,7 +258,7 @@ mod boiler_implementation {
     {
         pub fn new(
             pin_tx: GpioPin<PB09, PushPullOutput>,
-            pin_rx: GpioPin<PB08, PushPullOutput>,
+            pin_rx: GpioPin<PB08, PullUpInput>,
             tc4_timer: pac::Tc4,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
@@ -450,7 +450,7 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
         toggle_pin.toggle().unwrap();
         Mono::delay(MillisDuration::<u32>::from_ticks(100).convert()).await;
     }
-}   
+}
 
 #[embassy_executor::task]
 async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
@@ -586,7 +586,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  Set initial level of OpenTherm bus to high:
     pwm_tx_pin.set_high().unwrap();
 
-    let pwm_rx_pin = pins.pb08.into_push_pull_output();
+    let pwm_rx_pin = pins.pb08.into_pull_up_input();
     //  let _pwm_tx_pin = pins.pb09.into_alternate::<E>();
     let tc4_timer = peripherals.tc4;
 
