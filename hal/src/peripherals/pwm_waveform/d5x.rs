@@ -117,7 +117,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
 
-        //  First poll the future starts the DMA transfer
+        //  First poll the future starts the DMA transfer. It sets enable bit of the DMA
         let value_to_return = dma_future.await;
 
         count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
