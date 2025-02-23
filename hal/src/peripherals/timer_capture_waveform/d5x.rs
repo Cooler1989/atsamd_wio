@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use core::future::Future;
+
 use atsamd_hal_macros::hal_cfg;
 
 use crate::clock;
@@ -12,6 +14,8 @@ use crate::pac::Mclk;
 use crate::time::Hertz;
 use crate::timer_params::TimerParams;
 use crate::typelevel::{Is, NoneT, Sealed};
+
+use pin_project::pin_project;
 
 use paste::paste;
 
@@ -39,20 +43,43 @@ unsafe impl<T: Beat> Buffer for TimerCaptureWaveformSourcePtr<T> {
     }
 }
 
-//  impl<P, M, Z, D, R, T> Spi<Config<P, M, Z>, D, R, T>
-//  where
-//      P: ValidPads,
-//      M: OpMode,
-//      Z: Size,
-//      Config<P, M, Z>: ValidConfig,
-//      D: Capability,
-//      Z::Word: Beat,
-//  {
-//      #[inline]
-//      pub(in super::super) fn sercom_ptr(&self) -> SercomPtr<Z::Word> {
-//          SercomPtr(self.config.regs.spi().data().as_ptr() as *mut _)
-//      }
-//  }
+#[pin_project]
+struct TimerCapatureDmaWrapper<'a, DmaFut, T> {
+    #[pin]
+    _dma_future: DmaFut,
+    timer_started: bool,
+    _timer: &'a T,
+}
+
+impl<'a, DmaFut, T> TimerCapatureDmaWrapper<'a, DmaFut, T> {
+    fn new(dma_future: DmaFut, timer: &'a T) -> Self {
+        Self { _dma_future: dma_future, timer_started: false, _timer: timer }
+    }
+}
+
+impl<'a, DmaFut, T> core::future::Future for TimerCapatureDmaWrapper<'a, DmaFut, T>
+where
+    DmaFut: core::future::Future<Output = Result<(), DmacError>>,
+    T: TimerCounterStart,
+{
+    type Output = Result<(), DmacError>;
+
+    fn poll(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<Self::Output> {
+        //  let mut pinned = core::pin::pin!(self);
+        let this = self.as_mut().project();
+
+        //  First time the future is polled, it sets enable bit of DMA. Only after that the timer shall be started.
+        let result = this._dma_future.poll(cx); 
+        if *this.timer_started == false {
+            *this.timer_started = true;
+            this._timer.start();
+        }
+        result
+    }
+}
 
 // Timer/Counter (TCx)
 //
@@ -81,59 +108,43 @@ pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
 
-    fn start_capture(&mut self) {
+    fn start_capture_timer(&mut self) {
         let count = self.base_pwm.tc.count32();
-        count.cc(0).write(|w| unsafe { w.bits(0x00) });
-        while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(0x00) });
-        while count.syncbusy().read().cc1().bit_is_set() {}
-
-        count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
 
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
     }
 
-    pub async fn start_timer_prepare_dma_transfer(&mut self) -> Result<(),DmacError> {
+    pub async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) -> Result<(),DmacError> {
 
-        self.start_capture();
         let count = self.base_pwm.tc.count32();
 
-        count.cc(0).write(|w| unsafe { w.bits(0x00) });
-        while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(0) });
-        while count.syncbusy().read().cc1().bit_is_set() {}
-        count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(0) });
-
-        let mut capture_memory: [u32; 128] = [0; 128];
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
         let dma_future = self._channel.as_mut().transfer_future(
             pwm_dma_address,
-            capture_memory.as_mut_slice(),
+            capture_memory,
             TriggerSource::$event,
             TriggerAction::Burst,
         );
+
+        //  dma_future.as_mut().poll()
+
+        let dma_wrapped_future = TimerCapatureDmaWrapper::new(dma_future, &self.base_pwm);
+
+        //  TODO: Change the implementation of the DMA channel so that the timer can be started before the DMA gets enabled
+        //  First poll the future starts the DMA transfer. It sets enable bit of the DMA.
+        dma_wrapped_future.await
+        //  Right after the DMA transfer is started, we can start the timer.
+
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
         //  of the timer.
-        count.ctrla().modify(|_, w| w.enable().set_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
-
-        //  First poll the future starts the DMA transfer
-        let value_to_return = dma_future.await;
-
-        count.cc(1).write(|w| unsafe { w.bits(0) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(0) });
-        count.cc(0).write(|w| unsafe { w.bits(0) });
-        count.ccbuf(0).write(|w| unsafe { w.bits(0) });
-
-        count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
+        //  self.start_capture_timer();
+        //  count.ctrla().modify(|_, w| w.enable().set_bit());
+        //  while count.syncbusy().read().enable().bit_is_set() {}
 
         // wait for the settings to be applied
-        while count.syncbusy().read().cc0().bit_is_set() {}
+        //  while count.syncbusy().read().cc0().bit_is_set() {}
 
-        value_to_return
     }
 
     pub fn decompose(self) -> (DmaCh, crate::pac::$TC, $pinout<I>)
@@ -166,7 +177,7 @@ impl<I: PinId> $TYPE<I> {
         mclk: &mut Mclk,
     ) -> Self {
         let count = tc.count32();
-        let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
+        //  let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
 
         //  write(|w| w.ccbuf().bits(duty as u8));
@@ -194,9 +205,13 @@ impl<I: PinId> $TYPE<I> {
             //      _ => unreachable!(),
             //  }
         });
-        count.ctrla().write(|w| w.capten0().set_bit());
-        count.ctrla().write(|w| w.copen0().set_bit());
+        count.ctrla().modify(|_, w| w.capten0().set_bit().copen0().set_bit());
+        //  count.ctrla().modify(|w| w.copen0().set_bit());
 
+        count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
+
+        //  count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
+        //  count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
         count.cc(0).write(|w| unsafe { w.bits(0x00) });
         while count.syncbusy().read().cc0().bit_is_set() {}
         count.cc(1).write(|w| unsafe { w.bits(0x00) });
@@ -220,7 +235,7 @@ impl<I: PinId> $TYPE<I> {
         }
     }
 
-    pub fn start(&mut self) {
+    pub fn start(&self) {
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
         //  of the timer.
         let count = self.tc.count32();
@@ -234,38 +249,12 @@ impl<I: PinId> $TYPE<I> {
     pub fn get_dma_ptr(&self) -> TimerCaptureWaveformSourcePtr<u32> {
         TimerCaptureWaveformSourcePtr(self.tc.count32().cc(TIMER_CHANNEL).as_ptr() as *mut _)
     }
+}
 
-    pub fn get_period(&self) -> Hertz {
-        let count = self.tc.count32();
-        let divisor = count.ctrla().read().prescaler().bits();
-        let top = count.cc(0).read().cc().bits();
-        self.clock_freq / divisor as u32 / (top + 1) as u32
-    }
-
-    pub fn set_period(&mut self, period: Hertz)
+impl<I: PinId> TimerCounterStart for $TYPE<I> {
+    fn start(&self)
     {
-        let period = period.into();
-        let params = TimerParams::new(period, self.clock_freq);
-        let count = self.tc.count32();
-        count.ctrla().modify(|_, w| w.enable().clear_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
-        count.ctrla().modify(|_, w| {
-                match params.divider {
-                    1 => w.prescaler().div1(),
-                    2 => w.prescaler().div2(),
-                    4 => w.prescaler().div4(),
-                    8 => w.prescaler().div8(),
-                    16 => w.prescaler().div16(),
-                    64 => w.prescaler().div64(),
-                    256 => w.prescaler().div256(),
-                    1024 => w.prescaler().div1024(),
-                    _ => unreachable!(),
-                }
-            });
-        count.ctrla().modify(|_, w| w.enable().set_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
-        count.cc(0).write(|w| unsafe { w.cc().bits(params.cycles as u32) });
-        while count.syncbusy().read().cc0().bit_is_set() {}
+        self.start();
     }
 }
 }
@@ -292,3 +281,7 @@ create_timer_capture! { TimerCapture5: (Tc5, TC5Pinout, Tc4Tc5Clock, apbcmask, t
 create_timer_capture! { TimerCapture6: (Tc6, TC6Pinout, Tc6Tc7Clock, apbdmask, tc6_, TimerCapture6Wrapper, Tc6Mc0) }
 #[hal_cfg("tc7")]
 create_timer_capture! { TimerCapture7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, tc7_, TimerCapture7Wrapper, Tc7Mc0) }
+
+trait TimerCounterStart {
+    fn start(&self);
+}

@@ -347,14 +347,22 @@ mod boiler_implementation {
             //  This element could be improved by reading some internal register of DMA that returns this count, as the array itself is borrowed by DMA and Rust would not allow to read it.
             //  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
 
+            //  let _result = self.capture_device
+            //      .as_mut()
+            //      .unwrap()
+            //      .start_timer_prepare_dma_transfer()
+            //      //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
+            //      .await;
+            let mut capture_memory: [u32; 128] = [0; 128];
             let _result = self.capture_device
                 .as_mut()
                 .unwrap()
-                .start_timer_prepare_dma_transfer()
-                //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
-                .await;
+                .start_timer_prepare_dma_transfer(&mut capture_memory).await;
 
             let mut timestamps = Vec::<core::time::Duration, N>::new();
+            for value in capture_memory.iter() {
+                let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
+            }
             (self, Ok((InitLevel::High, timestamps)))
         }
     }
@@ -448,7 +456,7 @@ pub fn check_and_clear_interrupts(flags: InterruptFlags) -> InterruptFlags {
 async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
     loop {
         toggle_pin.toggle().unwrap();
-        Mono::delay(MillisDuration::<u32>::from_ticks(100).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(1000).convert()).await;
     }
 }
 
@@ -456,6 +464,7 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
 async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
 {
     let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+    let count32 = tc4_readonly .count32();
     let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
     //  let mut value_cc1 = 0x00u8;
     loop {
@@ -471,8 +480,6 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
 
         //  let mut delay = Delay::new(core.SYST, &mut clocks);
         { //  Read counter one by one to see if it is running:
-            let count32 = tc4_readonly
-                .count32();
             let _ = count32 .ctrlbset() .write(|w| w.cmd().readsync());
             let cnt_value = count32.count().read().bits();
             let _ = count32
@@ -483,14 +490,17 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
             hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
         }
 
-        //  hprintln!(
-        //      "tc4int:0x{:08X}, cc1:0x{:08X}",
-        //      tc4_readonly.count8().intflag().read().bits(),
-        //      tc4_readonly.count8().cc(1).read().bits()
-        //  )
-        //  .ok();
+        hprintln!(
+            "tc4int:0x{:08X}, cc0:0x{:08X}",
+            count32.intflag().read().bits(),
+            count32.cc(0).read().bits()
+        )
+        .ok();
+        hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
+        hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
         //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
-        //  hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+        hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+        hprintln!("dmactrl:0x{:08X}", dmac_readonly.ctrl().read().bits()).ok();
 
         //  let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
         //  if check_and_clear_interrupts(flags_to_check).ovf() {
@@ -590,7 +600,10 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  let _pwm_tx_pin = pins.pb09.into_alternate::<E>();
     let tc4_timer = peripherals.tc4;
 
-    Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+    let async_lambda_delay = || async move {
+        Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+    };
+    async_lambda_delay().await;
 
     //  let mut user_led: bsp::UserLed = pin_alias!(pins.user_led).into();
     let mut user_led: UserLed = pins.pa15.into();
@@ -634,47 +647,42 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     hprintln!("main:: loop{} start:").ok();
 
+    let (device, result) = edge_trigger_capture_dev
+        .trigger(
+            [
+                true, true, true, true, false, true, false, true, false, false, true, false,
+                false, true, true, true,
+            ]
+            .iter()
+            .copied(),
+            Duration::from_millis(100),
+        )
+        .await;
+    result.unwrap();
+
+    let mut edge_trigger_capture_dev = device.transition_to_capture_capable_device();
+
     loop {
-        let (device, result) = edge_trigger_capture_dev
-            .trigger(
-                [
-                    true, true, true, true, false, true, false, true, false, false, true, false,
-                    false, true, true, true,
-                ]
-                .iter()
-                .copied(),
-                Duration::from_millis(100),
-            )
-            .await;
-        result.unwrap();
-
-        let device = device.transition_to_capture_capable_device();
-
-        let (device, result) = device.start_capture(Duration::from_millis(100), Duration::from_millis(100)).await;
+        let device = edge_trigger_capture_dev;
+        //  hprintln!("Wait long before starting the capture").ok();
+        //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+        hprintln!("Start Capture").ok();
+        let dur = Duration::from_millis(100);
+        let (device, result) = 
+            device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
             hprintln!("Capture finished with: {}", vector.len()).ok();
         }
+        hprintln!("Finish Capture").ok();
 
-        let device = device.transition_to_trigger_capable_device();
-        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
-
-        let (device, _result) = device
-            .trigger(
-                [
-                    true, true, true, true, false, true, false, true, false, false, true, false,
-                    false, true, true, true,
-                ]
-                .iter()
-                .copied(),
-                Duration::from_millis(100),
-            )
-            .await;
+        //  let device = device.transition_to_trigger_capable_device();
+        //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
 
         edge_trigger_capture_dev = device;
         //  let _ = boiler_controller.process().await.unwrap();
 
         user_led.toggle().unwrap();
-        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
         //      //  pwm4.set_duty(max_duty / 8);
         //      //  delay.delay_ms(2000u16);
     }
