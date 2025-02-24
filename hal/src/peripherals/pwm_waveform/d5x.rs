@@ -229,7 +229,7 @@ impl<I: PinId> $TYPE<I> {
     }
 
     //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
-    pub fn with_dma_channel<CH>(mut self, channel: CH ) -> [<$TYPE Future>]<I, CH>
+    pub fn with_dma_channel<CH>(self, channel: CH ) -> [<$TYPE Future>]<I, CH>
         where
         CH: AnyChannel<Status=ReadyFuture>
     {

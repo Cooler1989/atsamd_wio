@@ -456,7 +456,7 @@ pub fn check_and_clear_interrupts(flags: InterruptFlags) -> InterruptFlags {
 async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
     loop {
         toggle_pin.toggle().unwrap();
-        Mono::delay(MillisDuration::<u32>::from_ticks(1000).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
     }
 }
 
@@ -480,27 +480,32 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
 
         //  let mut delay = Delay::new(core.SYST, &mut clocks);
         { //  Read counter one by one to see if it is running:
-            let _ = count32 .ctrlbset() .write(|w| w.cmd().readsync());
+            let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
             let cnt_value = count32.count().read().bits();
-            let _ = count32
-                .ctrlbset()
-                .write(|w| w.cmd().readsync());
-            let cn2_value = count32
-                .count().read().bits();
-            hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+            let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
+            let cn2_value = count32.count().read().bits();
+            //hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
         }
 
-        hprintln!(
-            "tc4int:0x{:08X}, cc0:0x{:08X}",
-            count32.intflag().read().bits(),
-            count32.cc(0).read().bits()
-        )
-        .ok();
-        hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
-        hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
+        //  hprintln!(
+        //      "tc4int:0x{:08X}, cc0:0x{:08X}",
+        //      count32.intflag().read().bits(),
+        //      count32.cc(0).read().bits()
+        //  )
+        //  .ok();
+        //hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
+        //hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
         //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
-        hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
-        hprintln!("dmactrl:0x{:08X}", dmac_readonly.ctrl().read().bits()).ok();
+        //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+        // let btcnt = dmac_readonly.active().read().btcnt() ).ok();
+        hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().btcnt().bits() ).ok();
+        //hprintln!("dmactrl:0x{:08X}", dmac_readonly.ctrl().read().bits()).ok();
+        //hprintln!("dmabusy:0x{:08X}", dmac_readonly.busych().read().bits()).ok();
+        //hprintln!("dmachint:0x{:08X}", dmac_readonly.intstatus().read().bits()).ok();
+        //hprintln!("dmachintpend:0x{:08X}", dmac_readonly.intpend().read().bits()).ok();
+        //hprintln!("ch[0]chctrla:0x{:08X}", dmac_readonly.channel(0).chctrla().read().bits()).ok();
+        //hprintln!("ch[0]chint:0x{:08X}", dmac_readonly.channel(0).chintflag().read().bits()).ok();
+        //hprintln!("ch[0]chstat:0x{:08X}", dmac_readonly.channel(0).chstatus().read().bits()).ok();
 
         //  let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
         //  if check_and_clear_interrupts(flags_to_check).ovf() {
@@ -508,7 +513,7 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
         //  }
 
         //  delay.delay_ms(200u16);
-        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(2000).convert()).await;
     }
 }
 #[embassy_executor::task]
@@ -668,7 +673,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
         hprintln!("Start Capture").ok();
         let dur = Duration::from_millis(100);
-        let (device, result) = 
+        let (device, result) =
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
             hprintln!("Capture finished with: {}", vector.len()).ok();
@@ -682,9 +687,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         //  let _ = boiler_controller.process().await.unwrap();
 
         user_led.toggle().unwrap();
-        Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
-        //      //  pwm4.set_duty(max_duty / 8);
-        //      //  delay.delay_ms(2000u16);
+        Mono::delay(MillisDuration::<u32>::from_ticks(50000).convert()).await;
     }
 
     //  let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
