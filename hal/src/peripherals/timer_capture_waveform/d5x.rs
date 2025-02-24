@@ -72,7 +72,7 @@ where
         let this = self.as_mut().project();
 
         //  First time the future is polled, it sets enable bit of DMA. Only after that the timer shall be started.
-        let result = this._dma_future.poll(cx); 
+        let result = this._dma_future.poll(cx);
         if *this.timer_started == false {
             *this.timer_started = true;
             this._timer.start();
@@ -120,6 +120,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         let count = self.base_pwm.tc.count32();
 
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
+
         let dma_future = self._channel.as_mut().transfer_future(
             pwm_dma_address,
             capture_memory,
