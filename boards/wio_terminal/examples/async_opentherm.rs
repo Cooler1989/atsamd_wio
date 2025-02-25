@@ -347,17 +347,12 @@ mod boiler_implementation {
             //  This element could be improved by reading some internal register of DMA that returns this count, as the array itself is borrowed by DMA and Rust would not allow to read it.
             //  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
 
-            //  let _result = self.capture_device
-            //      .as_mut()
-            //      .unwrap()
-            //      .start_timer_prepare_dma_transfer()
-            //      //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
-            //      .await;
-            let mut capture_memory: [u32; 128] = [0; 128];
+            let mut capture_memory: [u32; N] = [0; N];
             let _result = self.capture_device
                 .as_mut()
                 .unwrap()
                 .start_timer_prepare_dma_transfer(&mut capture_memory).await;
+                //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
 
             let mut timestamps = Vec::<core::time::Duration, N>::new();
             for value in capture_memory.iter() {
@@ -687,7 +682,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         //  let _ = boiler_controller.process().await.unwrap();
 
         user_led.toggle().unwrap();
-        Mono::delay(MillisDuration::<u32>::from_ticks(50000).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
     }
 
     //  let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
