@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use core::future::Future;
+use futures::Either;
 
 use atsamd_hal_macros::hal_cfg;
 
@@ -78,6 +79,9 @@ where
             this._timer.start();
         }
         result
+        // Here I would like to add the check whether this call is not coming from timer interrupt. 
+        // Prerequisite is that the timer interrupt is enabled and setup to interrupt on each Match event.
+        // Another prerequisite is that the timer is setupt to produce overflow at around 500ms.
     }
 }
 
@@ -131,10 +135,20 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         //  dma_future.as_mut().poll()
 
         let dma_wrapped_future = TimerCapatureDmaWrapper::new(dma_future, &self.base_pwm);
+        // Alternatively, here the simplest solution may be that we poll dma feature until it is ready in the meantime checking the timer state.
+        // I think this is prio one to check.
+        // The waker part, especially with whe vtable concept may be a bit complicated.
+        // On a plus side, the waker is not needed as we manually poll the future.
+        //  let waker = AtomicWaker::new(); // Is Copilot right?
 
+        let timeout_future = async {};
         //  TODO: Change the implementation of the DMA channel so that the timer can be started before the DMA gets enabled
         //  First poll the future starts the DMA transfer. It sets enable bit of the DMA.
-        dma_wrapped_future.await
+        //  dma_wrapped_future.await
+        futures::future::select(dma_wrapped_future, timeout_future).await {
+            Either::Left((value, _)) => value,
+            Either::Right((_, _)) => Ok(()),
+        }
         //  Right after the DMA transfer is started, we can start the timer.
 
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
