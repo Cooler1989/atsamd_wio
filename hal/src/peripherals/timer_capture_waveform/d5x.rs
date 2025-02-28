@@ -184,6 +184,9 @@ impl<I: PinId> $TYPE<I> {
         //  write(|w| w.ccbuf().bits(duty as u8));
         let params = TimerParams::new(freq.convert(), clock_freq);
         mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
+        //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
+        //  datasheet declarations so be cerful.
+        mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
         count.ctrla().write(|w| w.swrst().set_bit());
         while count.ctrla().read().bits() & 1 != 0 {}
         count.ctrla().modify(|_, w| w.enable().clear_bit());

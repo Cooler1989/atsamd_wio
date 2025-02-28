@@ -479,7 +479,7 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
             let cnt_value = count32.count().read().bits();
             let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
             let cn2_value = count32.count().read().bits();
-            //hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+            hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
         }
 
         //  hprintln!(
