@@ -482,12 +482,8 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
             hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
         }
 
-        //  hprintln!(
-        //      "tc4int:0x{:08X}, cc0:0x{:08X}",
-        //      count32.intflag().read().bits(),
-        //      count32.cc(0).read().bits()
-        //  )
-        //  .ok();
+        hprintln!("tc4int:0x{:08X}", count32.intflag().read().bits()).ok();
+        hprintln!("tc4cc0:0x{:08X}", count32.cc(0).read().bits()).ok();
         //hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
         //hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
         //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();

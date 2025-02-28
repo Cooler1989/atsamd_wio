@@ -157,17 +157,10 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
 /*
 ///
-/// PRESCALER = 6, in reference project written in C++
-/// cc = 233
-/// per = 233
+/// To resolve the issue of the end condition for DMA transfer we probably need to use second interrupt signal from the timer
+/// One possibility is to use the overflow, but considering 32 bits counter it is not very practical.
+/// Another possibility is to use the compare match on timer channel 1. The compare match can be set to the maximum value of the counter.
 ///
-/// As the timer is set to produce idle level signal, it can be started before
-/// we start the DMA transfer. It will naturally pick and start from the
-/// beginning of next cycle of the timer. Timer is configured to prodduce
-/// constant period signal by setting PER register to a value that corresponds
-/// to requested frequency of the manchester signal. Base of the working
-/// principle is that the timer CCx register will be loaded with either 0x00
-/// of 0xFF to produce either full cycle high or low signal.
 */
 impl<I: PinId> $TYPE<I> {
     pub fn new_timer_capture(
@@ -177,6 +170,8 @@ impl<I: PinId> $TYPE<I> {
         pinout: $pinout<I>,
         mclk: &mut Mclk,
     ) -> Self {
+        //  TODO: Calculate the valuee of the compare match register:
+        let capture_comapre_value_timeout = 0x8000_0000_u32;
         let count = tc.count32();
         //  let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
@@ -187,16 +182,19 @@ impl<I: PinId> $TYPE<I> {
         //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
         //  datasheet declarations so be cerful.
         mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
-        count.ctrla().write(|w| w.swrst().set_bit());
-        while count.ctrla().read().bits() & 1 != 0 {}
+
+        // First disable the tiemer, only after that we can set SWRST bit.
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
+
+        count.ctrla().write(|w| w.swrst().set_bit());
+        while count.ctrla().read().bits() & 1 != 0 {}
 
         //  TODO:  resolve copen1 question:
         //  count.ctrla().modify(|_, w| w.copen1().set_bit());
         count.ctrla().modify(|_, w| w.mode().count32());
         count.ctrla().modify(|_, w| {
-            w.prescaler().div256()
+            w.prescaler().div1()
             //  match params.divider {
             //      1 => w.prescaler().div1(),
             //      2 => w.prescaler().div2(),
@@ -212,13 +210,17 @@ impl<I: PinId> $TYPE<I> {
         count.ctrla().modify(|_, w| w.capten0().set_bit().copen0().set_bit());
         //  count.ctrla().modify(|w| w.copen0().set_bit());
 
+        //  clear all interrupt flags:
+        count.intflag().write(|_, w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
+
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
+        count.intenset().modify(|_, w| w.mc1().set_bit() );
 
         //  count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
         //  count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
         count.cc(0).write(|w| unsafe { w.bits(0x00) });
         while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(0x00) });
+        count.cc(1).write(|w| unsafe { w.bits(capture_comapre_value_timeout) });
         while count.syncbusy().read().cc1().bit_is_set() {}
 
         Self {
