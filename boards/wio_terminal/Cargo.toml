@@ -36,6 +36,7 @@ generic-array = { version = "0.14", optional = true }
 seeed-erpc = { version = "0.1.1", optional = true }
 defmt = "0.3"
 defmt-rtt = "0.4"
+embassy-sync = { version = "0.6" }
 embassy-executor = { version = "0.6.2", features = [
   "arch-cortex-m",
   "executor-thread",

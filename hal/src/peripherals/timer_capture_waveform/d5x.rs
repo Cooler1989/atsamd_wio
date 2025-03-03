@@ -211,7 +211,7 @@ impl<I: PinId> $TYPE<I> {
         //  count.ctrla().modify(|w| w.copen0().set_bit());
 
         //  clear all interrupt flags:
-        count.intflag().write(|_, w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
+        count.intflag().write(|w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
 
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
         count.intenset().modify(|_, w| w.mc1().set_bit() );

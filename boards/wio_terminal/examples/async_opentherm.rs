@@ -290,7 +290,31 @@ mod boiler_implementation {
         }
     }
 
-    // impl<'a, D, M, const N: usize> AtsamdEdgeTriggerCapture<'a, D, NoneT, N>
+    struct AtsamdGpioEdgeTriggerDev {
+        pin_tx: GpioPin<PA17, PushPullOutput>,
+    }
+
+    impl AtsamdGpioEdgeTriggerDev
+    {
+        pub fn new(pin: GpioPin<PA17, PushPullOutput>) -> Self {
+            pin.set(1).unwrap();  // Set to idle state
+            Self{pin}
+        }
+    }
+
+    impl EdgeTriggerInterface for AtsamdGpioEdgeTriggerDev {
+        async fn trigger( mut self, iterator: impl Iterator<Item = bool>,
+                          period: core::time::Duration) -> (Self, Result<(), TriggerError>) {
+
+            self.pin.set(1).unwrap(); //  idle state
+            for (_idx, value) in iterator.enumerate() {
+                Mono::delay(value.convert()).await;
+            }
+            //  Always success:
+            (self, Ok(()))
+        }
+    }
+
     impl<'a, D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
@@ -452,6 +476,24 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
     loop {
         toggle_pin.toggle().unwrap();
         Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
+    }
+}
+
+/// The idea here is to use simpler to implement TX driver using gpio timer to ease on
+/// implementation of the OpenTherm RX driver based on timer + DMA
+#[embassy_executor::task]
+async fn simulate_opentherm_tx(mut tx_pin: Gpio<PA17, Outpu<PushPull>>, queue: SomeHeaplessQueue) {
+    let hw_dev = AtsamdGpioEdgeTriggerDev::new(pin);
+
+    // Give it some time before fire-up the
+    Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+    //  TODO: implement heapless queue receiving requests
+    queue.receive();
+    let mut pass_dev_in_loop = hw_dev;
+    loop {
+        //  The device implements the trigger interface, it sahll implement send as well:
+        let (dev, result) = pass_dev_in_loop.send_open_therm_message(OpenThermMessage::new());
+        pass_dev_in_loop = dev;
     }
 }
 
@@ -664,6 +706,8 @@ async fn main(spawner: embassy_executor::Spawner) {
         //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
         hprintln!("Start Capture").ok();
         let dur = Duration::from_millis(100);
+        //  TODO: implement trigger to simulation task by sending something into the queue:
+        queue.send();
         let (device, result) =
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
