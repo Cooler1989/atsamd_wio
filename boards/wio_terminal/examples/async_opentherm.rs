@@ -2,7 +2,6 @@
 #![no_main]
 
 use boiler_implementation::AtsamdEdgeTriggerCapture;
-use boiler_implementation::SendOpenThermMessage;
 use bsp::hal::time::Hertz;
 use core::time::Duration;
 use defmt_rtt as _;
@@ -11,7 +10,7 @@ use hal::fugit::MillisDuration;
 use heapless::Vec;
 use panic_probe as _;
 
-use embassy_sync::channel::{Channel, ReceiveFuture};
+use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 
 use crate::pac::Mclk;
@@ -49,6 +48,8 @@ use rtic_monotonics::Monotonic;
 
 use modular_bitfield::prelude::*;
 
+//  use static_cell::StaticCell;
+
 rtic_monotonics::systick_monotonic!(Mono, 10000);
 
 #[cfg(feature = "use_opentherm")]
@@ -59,6 +60,7 @@ use boiler::opentherm_interface::{
     },
     open_therm_message::{CHState, Temperature, OpenThermMessage},
     OpenThermEdgeTriggerBus,
+    SendOpenThermMessage,
 };
 #[cfg(feature = "use_opentherm")]
 use boiler::{BoilerControl, Instant, TimeBaseRef};
@@ -78,7 +80,7 @@ atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
     DMAC: [DMAC_0, DMAC_1, DMAC_2, DMAC_OTHER] => atsamd_hal::dmac::InterruptHandler;
 });
 
-enum SignalState{ Ready_}
+enum SignalState{Ready_}
 static CHANNEL: Channel<ThreadModeRawMutex, SignalState, 64> = Channel::new();
 
 trait OtMode {}
@@ -324,7 +326,8 @@ mod boiler_implementation {
                     self.pin_tx.set_low().unwrap(); //  idle state
                 }
 
-                Mono::delay(period.into()).await;
+                //  Mono::delay(FugitDuration::from_micros(period.into())).await;
+                Mono::delay(MillisDuration::<u32>::from_ticks(period.as_millis().try_into().unwrap()).convert()).await;
             }
             //  Always success:
             (self, Ok(()))
@@ -498,17 +501,20 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
 /// The idea here is to use simpler to implement TX driver using gpio timer to ease on
 /// implementation of the OpenTherm RX driver based on timer + DMA
 #[embassy_executor::task]
-async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>, receiver: ReceiveFuture<'static, ThreadModeRawMutex, SignalState, 64>) {
+async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>, 
+    receiver: Receiver<'static, ThreadModeRawMutex, SignalState, 64>) 
+{
     let hw_dev = boiler_implementation::AtsamdGpioEdgeTriggerDev::new(tx_pin);
 
     // Give it some time before fire-up the
     Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
     //  TODO: implement heapless queue receiving requests
-    receiver.await;
     let mut pass_dev_in_loop = hw_dev;
     loop {
+        let _received = receiver.receive().await;
         //  The device implements the trigger interface, it sahll implement send as well:
-        let (dev, result) = pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0x12345678));
+        let (dev, result) = 
+            pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0x12345678).unwrap()).await;
         //  async fn send_open_therm_message(self, message: OpenThermMessage) -> (Self, Result<(), Error>){
         pass_dev_in_loop = dev;
     }
@@ -623,7 +629,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let pins = Pins::new(peripherals.port);
     let dev_dependency_tx_simulation_pin: GpioPin<PA17, Output<PushPull>> = pins.pa17.into_push_pull_output();
-    let receiver = CHANNEL.receive();
+    let receiver = CHANNEL.receiver();
     //async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>, receiver: u32);
     #[cfg(feature = "use_opentherm")]
     spawner.spawn(simulate_opentherm_tx(dev_dependency_tx_simulation_pin, receiver)).unwrap();
@@ -703,7 +709,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  Driver bringup temporary code:
     //  Idea is to configure additional PIN and connect it to the TC4 timer to capture the signal
     //  Pin toggle can be done in independent task
-    spawner.spawn(toggle_pin_task(dev_dependency_tx_simulation_pin)).unwrap();
+    //  spawner.spawn(toggle_pin_task(dev_dependency_tx_simulation_pin)).unwrap();
 
     hprintln!("main:: loop{} start:").ok();
 
@@ -729,6 +735,8 @@ async fn main(spawner: embassy_executor::Spawner) {
         hprintln!("Start Capture").ok();
         let dur = Duration::from_millis(100);
         let sender = CHANNEL.sender();
+        // trigger gpio simulation of the OpenTherm TX message
+        sender.send(SignalState::Ready_).await;
         let (device, result) =
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
