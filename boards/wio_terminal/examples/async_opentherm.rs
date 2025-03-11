@@ -102,6 +102,7 @@ mod boiler_implementation {
     use atsamd_hal::gpio::{Alternate, PullUpInput};
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
+    use fugit::MicrosDuration;
     use core::marker::PhantomData;
 
     use super::*;
@@ -326,8 +327,7 @@ mod boiler_implementation {
                     self.pin_tx.set_low().unwrap(); //  idle state
                 }
 
-                //  Mono::delay(FugitDuration::from_micros(period.into())).await;
-                Mono::delay(MillisDuration::<u32>::from_ticks(period.as_millis().try_into().unwrap()).convert()).await;
+                Mono::delay(MicrosDuration::<u32>::from_ticks(period.as_micros().try_into().unwrap()).convert()).await;
             }
             //  Always success:
             (self, Ok(()))
@@ -511,14 +511,18 @@ async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
     //  TODO: implement heapless queue receiving requests
     let mut pass_dev_in_loop = hw_dev;
     loop {
-        let _received = receiver.receive().await;
+        //  Comment this out to have on demand instead of periodic transfer:
+        //  let _received = receiver.receive().await;
+
+        //  hprintln!("channel::RX").ok();
+        //  tx_pin.toggle().unwrap();
         //  Wait for the receiver to be ready, give it some time to setup the capture
-        Mono::delay(MillisDuration::<u32>::from_ticks(100).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(10).convert()).await;
         //  The device implements the trigger interface, it shall implement send as well:
         let (dev, result) =
-            pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0x12345678).unwrap()).await;
-        //  async fn send_open_therm_message(self, message: OpenThermMessage) -> (Self, Result<(), Error>){
+            pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
         pass_dev_in_loop = dev;
+        Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
     }
 }
 
@@ -678,7 +682,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut user_led: UserLed = pins.pa15.into();
     user_led.toggle().unwrap();
 
-    spawner.spawn(print_capture_timer_state_task()).unwrap();
+    // spawner.spawn(print_capture_timer_state_task()).unwrap();
 
     //  DMA setup:
     let mut source = [0xffu8; 65];
@@ -731,6 +735,10 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut edge_trigger_capture_dev = device.transition_to_capture_capable_device();
     let sender_trigger_tx_sequence = CHANNEL.sender();
 
+    let time_d = core::time::Duration::from_millis(100);
+    let time_d :u32 = time_d.as_millis().try_into().unwrap();
+    hprintln!("Start Capture: {}", time_d).ok();
+
     loop {
         let device = edge_trigger_capture_dev;
         //  hprintln!("Wait long before starting the capture").ok();
@@ -743,11 +751,18 @@ async fn main(spawner: embassy_executor::Spawner) {
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
             hprintln!("Capture finished with: {}", vector.len()).ok();
+            let differences = vector
+                .iter()
+                .zip(vector.iter().skip(1))
+                .map(|(a, b)| b.as_micros() - a.as_micros());
+            for (i, v) in differences.enumerate() {
+                hprintln!("{}:{} us", i, v).ok();
+            }
         }
         hprintln!("Finish Capture").ok();
 
         //  let device = device.transition_to_trigger_capable_device();
-        //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
 
         edge_trigger_capture_dev = device;
         //  let _ = boiler_controller.process().await.unwrap();
