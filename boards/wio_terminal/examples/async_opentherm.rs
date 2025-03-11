@@ -80,8 +80,8 @@ atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
     DMAC: [DMAC_0, DMAC_1, DMAC_2, DMAC_OTHER] => atsamd_hal::dmac::InterruptHandler;
 });
 
-enum SignalState{Ready_}
-static CHANNEL: Channel<ThreadModeRawMutex, SignalState, 64> = Channel::new();
+enum SignalTxSimulation{Ready_}
+static CHANNEL: Channel<ThreadModeRawMutex, SignalTxSimulation, 64> = Channel::new();
 
 trait OtMode {}
 struct NoneT {}
@@ -317,11 +317,11 @@ mod boiler_implementation {
                           period: core::time::Duration) -> (Self, Result<(), TriggerError>) {
 
             for (_idx, value) in iterator.enumerate() {
-                if value 
+                if value
                 {
                     self.pin_tx.set_high().unwrap(); //  idle state
                 }
-                else 
+                else
                 {
                     self.pin_tx.set_low().unwrap(); //  idle state
                 }
@@ -501,8 +501,8 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
 /// The idea here is to use simpler to implement TX driver using gpio timer to ease on
 /// implementation of the OpenTherm RX driver based on timer + DMA
 #[embassy_executor::task]
-async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>, 
-    receiver: Receiver<'static, ThreadModeRawMutex, SignalState, 64>) 
+async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
+    receiver: Receiver<'static, ThreadModeRawMutex, SignalTxSimulation, 64>)
 {
     let hw_dev = boiler_implementation::AtsamdGpioEdgeTriggerDev::new(tx_pin);
 
@@ -512,8 +512,10 @@ async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
     let mut pass_dev_in_loop = hw_dev;
     loop {
         let _received = receiver.receive().await;
-        //  The device implements the trigger interface, it sahll implement send as well:
-        let (dev, result) = 
+        //  Wait for the receiver to be ready, give it some time to setup the capture
+        Mono::delay(MillisDuration::<u32>::from_ticks(100).convert()).await;
+        //  The device implements the trigger interface, it shall implement send as well:
+        let (dev, result) =
             pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0x12345678).unwrap()).await;
         //  async fn send_open_therm_message(self, message: OpenThermMessage) -> (Self, Result<(), Error>){
         pass_dev_in_loop = dev;
@@ -727,6 +729,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     result.unwrap();
 
     let mut edge_trigger_capture_dev = device.transition_to_capture_capable_device();
+    let sender_trigger_tx_sequence = CHANNEL.sender();
 
     loop {
         let device = edge_trigger_capture_dev;
@@ -734,9 +737,8 @@ async fn main(spawner: embassy_executor::Spawner) {
         //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
         hprintln!("Start Capture").ok();
         let dur = Duration::from_millis(100);
-        let sender = CHANNEL.sender();
         // trigger gpio simulation of the OpenTherm TX message
-        sender.send(SignalState::Ready_).await;
+        sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
         let (device, result) =
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
