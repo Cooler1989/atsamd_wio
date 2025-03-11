@@ -4,6 +4,7 @@ use core::future::Future;
 
 use atsamd_hal_macros::hal_cfg;
 
+use crate::async_hal::interrupts::{Binding, Handler, Interrupt, TC4};
 use crate::clock;
 #[cfg(feature = "async")]
 use crate::dmac::ReadyFuture;
@@ -44,20 +45,20 @@ unsafe impl<T: Beat> Buffer for TimerCaptureWaveformSourcePtr<T> {
 }
 
 #[pin_project]
-struct TimerCapatureDmaWrapper<'a, DmaFut, T> {
+struct TimerCaptureDmaWrapper<'a, DmaFut, T> {
     #[pin]
     _dma_future: DmaFut,
     timer_started: bool,
     _timer: &'a T,
 }
 
-impl<'a, DmaFut, T> TimerCapatureDmaWrapper<'a, DmaFut, T> {
+impl<'a, DmaFut, T> TimerCaptureDmaWrapper<'a, DmaFut, T> {
     fn new(dma_future: DmaFut, timer: &'a T) -> Self {
         Self { _dma_future: dma_future, timer_started: false, _timer: timer }
     }
 }
 
-impl<'a, DmaFut, T> core::future::Future for TimerCapatureDmaWrapper<'a, DmaFut, T>
+impl<'a, DmaFut, T> core::future::Future for TimerCaptureDmaWrapper<'a, DmaFut, T>
 where
     DmaFut: core::future::Future<Output = Result<(), DmacError>>,
     T: TimerCounterStart,
@@ -87,6 +88,9 @@ where
 
 // Timer/Counter (TCx)
 //
+trait TimerCounterInterrupt {
+    type Interrupt: Interrupt;
+}
 
 macro_rules! create_timer_capture {
     ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident, $event:ident)),+) => {
@@ -108,6 +112,11 @@ paste!{
 pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
     base_pwm: $TYPE<I>,
     _channel: DmaCh
+}
+
+// Implement Interrupt traits for basic timer struct:
+impl<I: PinId> TimerCounterInterrupt for $TYPE<I> {
+    type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
 }
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
@@ -134,7 +143,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
         //  dma_future.as_mut().poll()
 
-        let dma_wrapped_future = TimerCapatureDmaWrapper::new(dma_future, &self.base_pwm);
+        let dma_wrapped_future = TimerCaptureDmaWrapper::new(dma_future, &self.base_pwm);
 
         //  TODO: Change the implementation of the DMA channel so that the timer can be started before the DMA gets enabled
         //  First poll the future starts the DMA transfer. It sets enable bit of the DMA.
