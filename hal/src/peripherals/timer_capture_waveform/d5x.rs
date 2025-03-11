@@ -77,6 +77,10 @@ where
             *this.timer_started = true;
             this._timer.start();
         }
+        //  TODO: poll must be called so we need to register Waker for the future.
+        //  The problem is that we have two source of the wake-up events: DMA and Timer.
+        //  We need to combine them into one or as simple alternative we can use the Timer to wake up at the timeout.
+        //  This is not very efficient but it is simpler.
         result
     }
 }
