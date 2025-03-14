@@ -4,6 +4,8 @@ use core::future::Future;
 
 use atsamd_hal_macros::hal_cfg;
 
+use crate::typelevel;
+use crate::pac;
 use crate::async_hal::interrupts::{Binding, Handler, Interrupt, TC4};
 use crate::clock;
 #[cfg(feature = "async")]
@@ -21,6 +23,18 @@ use pin_project::pin_project;
 use paste::paste;
 
 const TIMER_CHANNEL: usize = 0;
+//  Second channel may be used for timeout detection. CCx can thus be set to some value 
+//  that will be compared with current value of the counter and trigger interrupt when the value matches.
+const TIMER_TIMEOUT_CHANNEL: usize = 1;
+
+#[hal_cfg("tc1-d11")]
+type RegBlock = pac::tc1::RegisterBlock;
+
+#[hal_cfg("tc3-d21")]
+type RegBlock = pac::tc3::RegisterBlock;
+
+#[hal_cfg("tc1-d5x")]
+type RegBlock = pac::tc0::RegisterBlock;
 
 #[derive(Clone)]
 pub struct TimerCaptureWaveformSourcePtr<T: Beat>(pub(in super::super) *mut T);
@@ -49,12 +63,13 @@ struct TimerCaptureDmaWrapper<'a, DmaFut, T> {
     #[pin]
     _dma_future: DmaFut,
     timer_started: bool,
+    tc_waker_index: usize,
     _timer: &'a T,
 }
 
 impl<'a, DmaFut, T> TimerCaptureDmaWrapper<'a, DmaFut, T> {
-    fn new(dma_future: DmaFut, timer: &'a T) -> Self {
-        Self { _dma_future: dma_future, timer_started: false, _timer: timer }
+    fn new(dma_future: DmaFut, timer: &'a T, tc_index: usize) -> Self {
+        Self { _dma_future: dma_future, timer_started: false, tc_waker_index:tc_index, _timer: timer }
     }
 }
 
@@ -74,10 +89,18 @@ where
 
         //  First time the future is polled, it sets enable bit of DMA. Only after that the timer shall be started.
         let result = this._dma_future.poll(cx);
+        if result == core::task::Poll::Ready(Ok(())) {
+            //  TODO: add check on the mc1 flag related to timeout
+            return result;
+        }
         if *this.timer_started == false {
             *this.timer_started = true;
+            //  TODO: Enable interrupts of the timer
             this._timer.start();
         }
+        use waker::WAKERS;
+        //  TODO: Do I have to disable interrupt/ put registartion into critical section?
+        WAKERS[self.tc_waker_index].register(cx.waker());
         //  TODO: poll must be called so we need to register Waker for the future.
         //  The problem is that we have two source of the wake-up events: DMA and Timer.
         //  We need to combine them into one or as simple alternative we can use the Timer to wake up at the timeout.
@@ -86,10 +109,48 @@ where
     }
 }
 
+/// Trait enabling the use of a Timer/Counter in async mode. Specifically, this
+/// trait enables us to register a `TC*` interrupt as a waker for timer futures.
+///
+/// **⚠️ Warning** This trait should not be implemented outside of this crate!
+pub trait TimerSpecificInterruptAndRegisters/* : Sealed*/ {
+    /// Index of this TC in the `STATE` tracker
+    const WAKER_ID: usize;
+
+    /// Get a reference to the timer's register block
+    fn reg_block(peripherals: &pac::Peripherals) -> &RegBlock;
+
+    /// Interrupt type for this timer
+    type Interrupt: Interrupt;
+}
+
 // Timer/Counter (TCx)
 //
 trait TimerCounterInterrupt {
     type Interrupt: Interrupt;
+}
+
+struct TimerCounterTimeoutInterruptHandler<I: TimerSpecificInterruptAndRegisters> {
+    _private: (),
+    _tc: core::marker::PhantomData<I>,
+}
+
+impl<T: TimerSpecificInterruptAndRegisters> typelevel::Sealed for TimerCounterTimeoutInterruptHandler<T> {}
+
+impl<T: TimerSpecificInterruptAndRegisters> Handler<T::Interrupt> for TimerCounterTimeoutInterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        use waker::WAKERS;
+        //  WAKERS[extract_number!(I)].wake();
+        let peripheral = unsafe{ crate::pac::Peripherals::steal() };
+    }
+}
+
+const fn extract_number(tc_name: &str) -> usize {
+    let bytes = tc_name.as_bytes();
+    let last_byte = bytes[bytes.len() - 1];
+    let tc_number = (last_byte - b'0') as usize;
+    assert!(tc_number < MAX_TIMER_COUNT);
+    tc_number
 }
 
 macro_rules! create_timer_capture {
@@ -108,11 +169,32 @@ pub struct $TYPE<I: PinId> {
     //  _channel: Option<DmaCh>,
 }
 
+macro_rules! extract_number_macro {
+    ($tc_name:ident) => {
+        {
+            extract_number(stringify!{$tc_name})
+        }
+    };
+}
+
+paste!{
+impl<I: PinId> TimerSpecificInterruptAndRegisters for $TYPE<I> {
+    const WAKER_ID: usize = extract_number_macro!($TC);
+
+    fn reg_block(peripherals: &pac::Peripherals) -> &RegBlock {
+        &*peripherals.[< $TC:lower >]
+    }
+
+    type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
+}
+}
+
 paste!{
 pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
     base_pwm: $TYPE<I>,
     _channel: DmaCh
 }
+
 
 // Implement Interrupt traits for basic timer struct:
 impl<I: PinId> TimerCounterInterrupt for $TYPE<I> {
@@ -143,7 +225,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
         //  dma_future.as_mut().poll()
 
-        let dma_wrapped_future = TimerCaptureDmaWrapper::new(dma_future, &self.base_pwm);
+        let dma_wrapped_future = TimerCaptureDmaWrapper::new(dma_future, &self.base_pwm, extract_number_macro!($TC));
 
         //  TODO: Change the implementation of the DMA channel so that the timer can be started before the DMA gets enabled
         //  First poll the future starts the DMA transfer. It sets enable bit of the DMA.
@@ -184,7 +266,7 @@ impl<I: PinId> $TYPE<I> {
         mclk: &mut Mclk,
     ) -> Self {
         //  TODO: Calculate the valuee of the compare match register:
-        let capture_comapre_value_timeout = 0x8000_0000_u32;
+        let capture_comapre_value_timeout = 0x0800_0000_u32;
         let count = tc.count32();
         //  let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
@@ -227,6 +309,7 @@ impl<I: PinId> $TYPE<I> {
         count.intflag().write(|w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
 
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
+        // enable interrupt on the timeout side channel:
         count.intenset().modify(|_, w| w.mc1().set_bit() );
 
         //  count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
@@ -304,3 +387,18 @@ create_timer_capture! { TimerCapture7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, t
 trait TimerCounterStart {
     fn start(&self);
 }
+
+const MAX_TIMER_COUNT: usize = 8;
+
+#[cfg(feature = "async")]
+mod waker {
+    use embassy_sync::waitqueue::AtomicWaker;
+
+    use super::MAX_TIMER_COUNT;
+
+    #[allow(clippy::declare_interior_mutable_const)]
+    const NEW_WAKER: AtomicWaker = AtomicWaker::new();
+    pub(super) static WAKERS: [AtomicWaker; MAX_TIMER_COUNT] =
+        [NEW_WAKER; MAX_TIMER_COUNT];
+}
+

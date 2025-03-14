@@ -58,3 +58,10 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
 the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
 any additional terms or conditions.
+
+### Lessons learned
+
+If you want to expand macro for hal drivers go to hal/ and use:
+
+cargo install cargo-expand
+CARGO_NET_GIT_FETCH_WITH_CLI=true cargo expand --features "samd51p, async, dma" peripherals::timer_capture_waveform > peripherals_timer_capture_waveform.rs
