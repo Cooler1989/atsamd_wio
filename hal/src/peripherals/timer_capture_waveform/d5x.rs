@@ -1,8 +1,10 @@
 #![allow(non_snake_case)]
 
 use core::future::Future;
+use core::sync::atomic;
 
 use atsamd_hal_macros::hal_cfg;
+use waker::INTERRUPT_FIRED;
 
 use crate::typelevel;
 use crate::pac;
@@ -91,27 +93,35 @@ where
         //  First time the future is polled, it sets enable bit of DMA. Only after that the timer shall be started.
         let result = this._dma_future.poll(cx);
         if result == core::task::Poll::Ready(Ok(())) {
+            this._timer.disable_interrupt();
             //  TODO: add check on the mc1 flag related to timeout
             return result;
         }
+
         if *this.timer_started == false {
+            //  let result = this._dma_future.poll(cx);
             *this.timer_started = true;
+            INTERRUPT_FIRED[*this.tc_waker_index].store(false, atomic::Ordering::Relaxed);
             //  TODO: Enable interrupts of the timer
             this._timer.start();
+            // Enable the NVIC interrupt:
+            this._timer.enable_interrupt();
         }
 
-        if this._timer.is_interrupt_active() {
+        let result = if INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
+            this._timer.disable_interrupt();
+            core::task::Poll::Ready(Ok(()))
+        } else {
+            use waker::WAKERS;
+            //  TODO: Do I have to disable interrupt/ put registartion into critical section?
+            WAKERS[self.tc_waker_index].register(cx.waker());
+            //  TODO: poll must be called so we need to register Waker for the future.
+            //  The problem is that we have two source of the wake-up events: DMA and Timer.
+            //  We need to combine them into one or as simple alternative we can use the Timer to wake up at the timeout.
+            //  This is not very efficient but it is simpler.
+            core::task::Poll::Pending
+        };
 
-        }
-        //  if count.syncbusy().read().cc1().bit_is_set() {}
-
-        use waker::WAKERS;
-        //  TODO: Do I have to disable interrupt/ put registartion into critical section?
-        WAKERS[self.tc_waker_index].register(cx.waker());
-        //  TODO: poll must be called so we need to register Waker for the future.
-        //  The problem is that we have two source of the wake-up events: DMA and Timer.
-        //  We need to combine them into one or as simple alternative we can use the Timer to wake up at the timeout.
-        //  This is not very efficient but it is simpler.
         result
     }
 }
@@ -186,10 +196,12 @@ impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHan
         let tc = T::reg_block(&periph);
         let intflag = &tc.count32().intflag();
 
+        //  Wake only on the compare match channel 1, which is used for the timeout detection.
         if intflag.read().mc1().bit_is_set() {
             // Clear the flag
             intflag.modify(|_, w| w.mc1().set_bit());
-            use waker::WAKERS;
+            use waker::{WAKERS, INTERRUPT_FIRED};
+            INTERRUPT_FIRED[T::WAKER_IDX].store(true, atomic::Ordering::Relaxed);
             WAKERS[T::WAKER_IDX].wake();
         }
     }
@@ -283,6 +295,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
 
+        //  TODO: make transfer_future method to return real number of transferred items
         let dma_future = self._channel.as_mut().transfer_future(
             pwm_dma_address,
             capture_memory,
@@ -336,7 +349,7 @@ impl<I: PinId> $TYPE<I> {
         //  timeout: MillisDurationU32,
     ) -> Self {
         //  TODO: Calculate the valuee of the compare match register:
-        let capture_comapre_value_timeout = 0x0800_0000_u32;
+        let capture_comapre_value_timeout = 0x8000_0000_u32;
         let count = tc.count32();
         //  let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
@@ -377,6 +390,7 @@ impl<I: PinId> $TYPE<I> {
 
         //  clear all interrupt flags:
         count.intflag().write(|w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
+        count.intflag().write(|w| w.mc1().set_bit());
 
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
         // enable interrupt on the timeout side channel:
@@ -426,13 +440,29 @@ impl<I: PinId> $TYPE<I> {
 }
 
 impl<I: PinId> TimerCounterStart for $TYPE<I> {
+    paste!{
+        type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
+    }
     fn start(&self)
     {
         self.start();
     }
-    fn is_interrupt_active(&self) -> bool {
+    fn is_mc1_interrupt_active(&self) -> bool {
         let count = self.tc.count32();
         count.intflag().read().mc1().bit_is_set()
+        //  if intflag.read().mc1().bit_is_set() {
+    }
+    fn enable_interrupt(&self)
+    {
+        unsafe {
+            Self::Interrupt::enable();
+        }
+    }
+    fn disable_interrupt(&self)
+    {
+        unsafe {
+            Self::Interrupt::disable();
+        }
     }
 }
 
@@ -460,14 +490,20 @@ create_timer_capture! { TimerCapture6: (Tc6, TC6Pinout, Tc6Tc7Clock, apbdmask, t
 create_timer_capture! { TimerCapture7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, tc7_, TimerCapture7Wrapper, Tc7Mc0) }
 
 trait TimerCounterStart {
+    type Interrupt: Interrupt;
     fn start(&self);
-    fn is_interrupt_active(&self) -> bool;
+    fn is_mc1_interrupt_active(&self) -> bool;
+    fn enable_interrupt(&self);
+    fn disable_interrupt(&self);
 }
 
 const MAX_TIMER_COUNT: usize = 8;
 
 #[cfg(feature = "async")]
 mod waker {
+    use core::char::MAX;
+    use core::sync::atomic::AtomicBool;
+
     use embassy_sync::waitqueue::AtomicWaker;
 
     use super::MAX_TIMER_COUNT;
@@ -476,5 +512,8 @@ mod waker {
     const NEW_WAKER: AtomicWaker = AtomicWaker::new();
     pub(super) static WAKERS: [AtomicWaker; MAX_TIMER_COUNT] =
         [NEW_WAKER; MAX_TIMER_COUNT];
+    const NEW_INTERRUP_FIRED: AtomicBool = AtomicBool::new(false);
+    pub(super) static INTERRUPT_FIRED: [AtomicBool; MAX_TIMER_COUNT] =
+        [NEW_INTERRUP_FIRED; MAX_TIMER_COUNT];
 }
 
