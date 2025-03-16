@@ -165,6 +165,7 @@ where
         I: Binding<T::Interrupt, InterruptHandler<T>>,
     {
         T::Interrupt::unpend();
+        // I think this should happen when first call to poll happens:
         unsafe { T::Interrupt::enable() };
         self.enable_interrupt();
 

@@ -74,6 +74,7 @@ use cortex_m_semihosting::hprintln;
 
 atsamd_hal::bind_interrupts!(struct Irqs {
     EIC_EXTINT_5 => atsamd_hal::eic::InterruptHandler;
+    TC4 => atsamd_hal::timer_capture_waveform::TimerCaptureInterruptHandler<atsamd_hal::timer_capture_waveform::TimerCapture4InterruptData>;
 });
 
 atsamd_hal::bind_multiple_interrupts!(struct DmacIrqs {
@@ -106,7 +107,6 @@ mod boiler_implementation {
     use core::marker::PhantomData;
 
     use super::*;
-
 
     struct ResourceHolder<D> {
         pin_rx: GpioPin<PB08, PushPullOutput>,
