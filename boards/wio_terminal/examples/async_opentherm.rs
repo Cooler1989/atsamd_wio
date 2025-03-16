@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use atsamd_hal::pac::rtc::mode0::count;
 use boiler_implementation::AtsamdEdgeTriggerCapture;
 use bsp::hal::time::Hertz;
 use core::time::Duration;
@@ -399,7 +400,10 @@ mod boiler_implementation {
 
             let mut timestamps = Vec::<core::time::Duration, N>::new();
             for value in capture_memory.iter() {
-                let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
+                //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
+                if *value > 0 {
+                    let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
+                }
             }
             (self, Ok((InitLevel::High, timestamps)))
         }
@@ -505,6 +509,7 @@ async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
     receiver: Receiver<'static, ThreadModeRawMutex, SignalTxSimulation, 64>)
 {
     let hw_dev = boiler_implementation::AtsamdGpioEdgeTriggerDev::new(tx_pin);
+    const DURATION_MS: u32 = 500;
 
     // Give it some time before fire-up the
     Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
@@ -512,7 +517,7 @@ async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
     let mut pass_dev_in_loop = hw_dev;
     loop {
         //  Comment this out to have on demand instead of periodic transfer:
-        //  let _received = receiver.receive().await;
+        let _received = receiver.receive().await;
 
         //  hprintln!("channel::RX").ok();
         //  tx_pin.toggle().unwrap();
@@ -522,7 +527,7 @@ async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
         let (dev, result) =
             pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
         pass_dev_in_loop = dev;
-        Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
+        //  Mono::delay(MillisDuration::<u32>::from_ticks(DURATION_MS).convert()).await;
     }
 }
 
@@ -550,17 +555,17 @@ async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Con
             let cnt_value = count32.count().read().bits();
             let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
             let cn2_value = count32.count().read().bits();
-            hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+            //  hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
         }
 
         hprintln!("tc4int:0x{:08X}", count32.intflag().read().bits()).ok();
-        hprintln!("tc4cc0:0x{:08X}", count32.cc(0).read().bits()).ok();
+        //  hprintln!("tc4cc0:0x{:08X}", count32.cc(0).read().bits()).ok();
         //hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
         //hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
         //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
         //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().bits()).ok();
         // let btcnt = dmac_readonly.active().read().btcnt() ).ok();
-        hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().btcnt().bits() ).ok();
+        //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().btcnt().bits() ).ok();
         //hprintln!("dmactrl:0x{:08X}", dmac_readonly.ctrl().read().bits()).ok();
         //hprintln!("dmabusy:0x{:08X}", dmac_readonly.busych().read().bits()).ok();
         //hprintln!("dmachint:0x{:08X}", dmac_readonly.intstatus().read().bits()).ok();
@@ -682,7 +687,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut user_led: UserLed = pins.pa15.into();
     user_led.toggle().unwrap();
 
-    // spawner.spawn(print_capture_timer_state_task()).unwrap();
+    spawner.spawn(print_capture_timer_state_task()).unwrap();
 
     //  DMA setup:
     let mut source = [0xffu8; 65];
@@ -735,15 +740,18 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut edge_trigger_capture_dev = device.transition_to_capture_capable_device();
     let sender_trigger_tx_sequence = CHANNEL.sender();
 
+    Mono::delay(MillisDuration::<u32>::from_ticks(10000).convert()).await;
+
     let time_d = core::time::Duration::from_millis(100);
     let time_d :u32 = time_d.as_millis().try_into().unwrap();
     hprintln!("Start Capture: {}", time_d).ok();
 
+    let mut count_iterations: u32 = 0;
     loop {
         let device = edge_trigger_capture_dev;
         //  hprintln!("Wait long before starting the capture").ok();
         //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
-        hprintln!("Start Capture").ok();
+        hprintln!("Start Capture {}", count_iterations).ok();
         let dur = Duration::from_millis(100);
         // trigger gpio simulation of the OpenTherm TX message
         sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
@@ -751,15 +759,16 @@ async fn main(spawner: embassy_executor::Spawner) {
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
             hprintln!("Capture finished with: {}", vector.len()).ok();
-            let differences = vector
+            let differences: Vec<u128, 128> = vector
                 .iter()
                 .zip(vector.iter().skip(1))
-                .map(|(a, b)| b.as_micros() - a.as_micros());
-            for (i, v) in differences.enumerate() {
+                .map(|(a, b)| if b > a {b.as_micros() - a.as_micros()} else {0}).collect();
+
+            for (i, v) in differences.into_iter().enumerate() {
                 hprintln!("{}:{} us", i, v).ok();
             }
         }
-        hprintln!("Finish Capture").ok();
+        hprintln!("Finish Capture {}", count_iterations).ok();
 
         //  let device = device.transition_to_trigger_capable_device();
         Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
@@ -769,6 +778,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
         user_led.toggle().unwrap();
         Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
+        count_iterations += 1;
     }
 
     //  let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
