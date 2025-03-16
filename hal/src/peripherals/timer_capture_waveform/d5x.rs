@@ -17,13 +17,14 @@ use crate::pac::Mclk;
 use crate::time::Hertz;
 use crate::timer_params::TimerParams;
 use crate::typelevel::{Is, NoneT, Sealed};
+use fugit::MillisDurationU32;
 
 use pin_project::pin_project;
 
 use paste::paste;
 
 const TIMER_CHANNEL: usize = 0;
-//  Second channel may be used for timeout detection. CCx can thus be set to some value 
+//  Second channel may be used for timeout detection. CCx can thus be set to some value
 //  that will be compared with current value of the counter and trigger interrupt when the value matches.
 const TIMER_TIMEOUT_CHANNEL: usize = 1;
 
@@ -98,6 +99,12 @@ where
             //  TODO: Enable interrupts of the timer
             this._timer.start();
         }
+
+        if this._timer.is_interrupt_active() {
+
+        }
+        //  if count.syncbusy().read().cc1().bit_is_set() {}
+
         use waker::WAKERS;
         //  TODO: Do I have to disable interrupt/ put registartion into critical section?
         WAKERS[self.tc_waker_index].register(cx.waker());
@@ -135,15 +142,23 @@ struct TimerCounterTimeoutInterruptHandler<I: TimerSpecificInterruptAndRegisters
     _tc: core::marker::PhantomData<I>,
 }
 
-impl<T: TimerSpecificInterruptAndRegisters> typelevel::Sealed for TimerCounterTimeoutInterruptHandler<T> {}
-
-impl<T: TimerSpecificInterruptAndRegisters> Handler<T::Interrupt> for TimerCounterTimeoutInterruptHandler<T> {
-    unsafe fn on_interrupt() {
-        use waker::WAKERS;
-        //  WAKERS[extract_number!(I)].wake();
-        let peripheral = unsafe{ crate::pac::Peripherals::steal() };
-    }
+trait TimerTraitToDo {
 }
+
+pub struct InterruptHandlerAsdf<T: TimerTraitToDo> {
+    _private: (),
+    _tc: core::marker::PhantomData<T>,
+}
+
+//  impl<T: TimerSpecificInterruptAndRegisters> typelevel::Sealed for TimerCounterTimeoutInterruptHandler<T> {}
+
+//  impl<T: TimerSpecificInterruptAndRegisters> Handler<T::Interrupt> for TimerCounterTimeoutInterruptHandler<T> {
+//      unsafe fn on_interrupt() {
+//          use waker::WAKERS;
+//          //  WAKERS[extract_number!(I)].wake();
+//          let peripheral = unsafe{ crate::pac::Peripherals::steal() };
+//      }
+//  }
 
 const fn extract_number(tc_name: &str) -> usize {
     let bytes = tc_name.as_bytes();
@@ -153,9 +168,44 @@ const fn extract_number(tc_name: &str) -> usize {
     tc_number
 }
 
+trait TimerCaptureCapable {
+    type Interrupt: Interrupt;
+    const WAKER_IDX: usize;
+    fn reg_block(peripherals: &pac::Peripherals) -> &RegBlock;
+}
+
+pub struct TimerCaptureInterruptHandler<T: TimerCaptureCapable> {
+    _private: (),
+    _tc: core::marker::PhantomData<T>
+}
+
+impl <T: TimerCaptureCapable> typelevel::Sealed for TimerCaptureInterruptHandler<T> {}
+impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        let periph = unsafe { crate::pac::Peripherals::steal() };
+        let tc = T::reg_block(&periph);
+        let intflag = &tc.count32().intflag();
+
+        if intflag.read().mc1().bit_is_set() {
+            // Clear the flag
+            intflag.modify(|_, w| w.mc1().set_bit());
+            use waker::WAKERS;
+            WAKERS[T::WAKER_IDX].wake();
+        }
+    }
+}
+
 macro_rules! create_timer_capture {
     ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident, $event:ident)),+) => {
         $(
+
+macro_rules! extract_number_macro {
+    ($tc_name:ident) => {
+        {
+            extract_number(stringify!{$tc_name})
+        }
+    };
+}
 
 use crate::pwm::$pinout;
 
@@ -169,24 +219,42 @@ pub struct $TYPE<I: PinId> {
     //  _channel: Option<DmaCh>,
 }
 
-macro_rules! extract_number_macro {
-    ($tc_name:ident) => {
-        {
-            extract_number(stringify!{$tc_name})
-        }
-    };
-}
+impl<I: PinId> typelevel::Sealed for $TYPE<I> {}
 
 paste!{
+    pub struct [<$TYPE InterruptData >] {
+    }
+    impl TimerCaptureCapable for [< $TYPE InterruptData >] {
+        const WAKER_IDX: usize = extract_number_macro!($TC);
+
+        type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
+
+        fn reg_block(peripherals: &pac::Peripherals) -> &RegBlock {
+            &*peripherals.[< $TC:lower >]
+        }
+    }
+}
+
+//  type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
+//  paste!{
+//  impl<I:PinId> Handler<crate::async_hal::interrupts::[< $TC:upper >]> for $TYPE<I> {
+//      unsafe fn on_interrupt() {
+//          use waker::WAKERS;
+//          WAKERS[0].wake();
+//      }
+//  }
+//  }
+
 impl<I: PinId> TimerSpecificInterruptAndRegisters for $TYPE<I> {
     const WAKER_ID: usize = extract_number_macro!($TC);
 
-    fn reg_block(peripherals: &pac::Peripherals) -> &RegBlock {
-        &*peripherals.[< $TC:lower >]
-    }
+    paste!{
+        fn reg_block(peripherals: &pac::Peripherals) -> &RegBlock {
+            &*peripherals.[< $TC:lower >]
+        }
 
-    type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
-}
+        type Interrupt = crate::async_hal::interrupts::[< $TC:upper >];
+    }
 }
 
 paste!{
@@ -194,7 +262,6 @@ pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
     base_pwm: $TYPE<I>,
     _channel: DmaCh
 }
-
 
 // Implement Interrupt traits for basic timer struct:
 impl<I: PinId> TimerCounterInterrupt for $TYPE<I> {
@@ -250,6 +317,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
     }
 }
 
+}  //  paste macrto
+
 /*
 ///
 /// To resolve the issue of the end condition for DMA transfer we probably need to use second interrupt signal from the timer
@@ -264,6 +333,7 @@ impl<I: PinId> $TYPE<I> {
         tc: crate::pac::$TC,
         pinout: $pinout<I>,
         mclk: &mut Mclk,
+        //  timeout: MillisDurationU32,
     ) -> Self {
         //  TODO: Calculate the valuee of the compare match register:
         let capture_comapre_value_timeout = 0x0800_0000_u32;
@@ -326,14 +396,16 @@ impl<I: PinId> $TYPE<I> {
         }
     }
 
-    //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
-    pub fn with_dma_channel<CH>(self, channel: CH ) -> [<$TYPE Future>]<I, CH>
-        where
-        CH: AnyChannel<Status=ReadyFuture>
-    {
-        [<$TYPE Future>] {
-            base_pwm: self,
-            _channel: channel,
+    paste!{
+        //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
+        pub fn with_dma_channel<CH>(self, channel: CH ) -> [<$TYPE Future>]<I, CH>
+            where
+            CH: AnyChannel<Status=ReadyFuture>
+        {
+            [<$TYPE Future>] {
+                base_pwm: self,
+                _channel: channel,
+            }
         }
     }
 
@@ -358,10 +430,13 @@ impl<I: PinId> TimerCounterStart for $TYPE<I> {
     {
         self.start();
     }
-}
+    fn is_interrupt_active(&self) -> bool {
+        let count = self.tc.count32();
+        count.intflag().read().mc1().bit_is_set()
+    }
 }
 
-impl<I: PinId> $crate::ehal::pwm::ErrorType for$TYPE<I> {
+impl<I: PinId> $crate::ehal::pwm::ErrorType for $TYPE<I> {
     type Error = ::core::convert::Infallible;
 }
 
@@ -386,6 +461,7 @@ create_timer_capture! { TimerCapture7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, t
 
 trait TimerCounterStart {
     fn start(&self);
+    fn is_interrupt_active(&self) -> bool;
 }
 
 const MAX_TIMER_COUNT: usize = 8;
