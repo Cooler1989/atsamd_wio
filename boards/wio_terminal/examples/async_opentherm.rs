@@ -740,7 +740,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut edge_trigger_capture_dev = device.transition_to_capture_capable_device();
     let sender_trigger_tx_sequence = CHANNEL.sender();
 
-    Mono::delay(MillisDuration::<u32>::from_ticks(10000).convert()).await;
+    Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
 
     let time_d = core::time::Duration::from_millis(100);
     let time_d :u32 = time_d.as_millis().try_into().unwrap();
@@ -748,6 +748,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let mut count_iterations: u32 = 0;
     loop {
+        Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
         let device = edge_trigger_capture_dev;
         //  hprintln!("Wait long before starting the capture").ok();
         //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
@@ -755,7 +756,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         let dur = Duration::from_millis(100);
         // trigger gpio simulation of the OpenTherm TX message
         sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
-        let (device, result) =
+        let (rx_device, result) =
             device.start_capture(dur, dur).await;
         if let Ok((level, vector)) = result {
             hprintln!("Capture finished with: {}", vector.len()).ok();
@@ -764,20 +765,22 @@ async fn main(spawner: embassy_executor::Spawner) {
                 .zip(vector.iter().skip(1))
                 .map(|(a, b)| if b > a {b.as_micros() - a.as_micros()} else {0}).collect();
 
-            for (i, v) in differences.into_iter().enumerate() {
-                hprintln!("{}:{} us", i, v).ok();
-            }
+            //  for (i, v) in differences.into_iter().enumerate() {
+            //      hprintln!("{}:{} us", i, v).ok();
+            //  }
         }
         hprintln!("Finish Capture {}", count_iterations).ok();
+        Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
 
-        //  let device = device.transition_to_trigger_capable_device();
-        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+        hprintln!("Start Trigger {}", count_iterations).ok();
+        let tx_device = rx_device.transition_to_trigger_capable_device();
+        let (tx_device, result) =
+            tx_device.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
 
-        edge_trigger_capture_dev = device;
+        edge_trigger_capture_dev = tx_device.transition_to_capture_capable_device();
         //  let _ = boiler_controller.process().await.unwrap();
 
         user_led.toggle().unwrap();
-        Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
         count_iterations += 1;
     }
 

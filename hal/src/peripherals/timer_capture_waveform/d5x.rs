@@ -349,7 +349,7 @@ impl<I: PinId> $TYPE<I> {
         //  timeout: MillisDurationU32,
     ) -> Self {
         //  TODO: Calculate the valuee of the compare match register:
-        let capture_comapre_value_timeout = 0x8000_0000_u32;
+        let capture_comapre_value_timeout = 0x4000_0000_u32;
         let count = tc.count32();
         //  let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
