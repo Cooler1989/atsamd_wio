@@ -374,6 +374,9 @@ impl<I: PinId> $TYPE<I> {
         //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
         //  datasheet declarations so be cerful.
         mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
+        //  TODO: Dirty hack to allow TC2 + TC5 timers work in 32 bits. This is somewhat against
+        //  datasheet declarations so be cerful.
+        mclk.apbbmask().modify(|_, w| w.tc3_().set_bit());
 
         // First disable the tiemer, only after that we can set SWRST bit.
         count.ctrla().modify(|_, w| w.enable().clear_bit());

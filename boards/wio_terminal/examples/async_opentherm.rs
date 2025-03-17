@@ -18,22 +18,21 @@ use crate::pac::Mclk;
 use bsp::pac;
 use bsp::{
     hal,
-    hal::gpio::{Output, OutputConfig, Pins, PushPull, PushPullOutput},
-    hal::gpio::{E, PB08, PB09, PA17},
+    hal::gpio::{Output, Input, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
+    hal::gpio::{E, PB08, PB09, PA16, PA17},
     pin_alias,
 };
 use wio_terminal::prelude::_embedded_hal_PwmPin;
 
 use hal::{
-    clock::{ClockGenId, ClockSource, GenericClockController, Tc4Tc5Clock},
+    clock::{ClockGenId, ClockSource, GenericClockController, Tc4Tc5Clock, Tc2Tc3Clock},
     delay::Delay,
     dmac,
-    dmac::{Beat, Buffer},
-    dmac::{DmaController, PriorityLevel, TriggerAction, TriggerSource},
+    dmac::{DmaController, PriorityLevel, Ch1, ReadyFuture},
     ehal::digital::{OutputPin, StatefulOutputPin},
     eic::{Eic, Sense},
     gpio::{Pin as GpioPin, PullUpInterrupt},
-    pwm::{Pwm4, TC4Pinout},
+    pwm::{TC4Pinout, TC2Pinout},
     pwm_wg::PwmWg4,
     timer_capture_waveform::{TimerCapture4, TimerCapture4Future},
 };
@@ -110,17 +109,11 @@ mod boiler_implementation {
 
     use super::*;
 
-    struct ResourceHolder<D> {
-        pin_rx: GpioPin<PB08, PushPullOutput>,
-        tc4_timer: pac::Tc4,
-        tc4_tc5_clock: Tc4Tc5Clock,
-        dma_channel: D,
-    }
-
     const VEC_SIZE_CAPTURE: usize = 128;
     pub(super) struct AtsamdEdgeTriggerCapture<
         'a,
         D: dmac::AnyChannel<Status = ReadyFuture>,
+        T,
         M: OtMode = NoneT,
         const N: usize = VEC_SIZE_CAPTURE,
     > {
@@ -132,30 +125,29 @@ mod boiler_implementation {
         pwm: Option<PwmWg4Future<PB09, D>>, // one alternative when TX operation
         capture_device: Option<TimerCapture4Future<PB08, D>>, // one alternative when RX operation
         dma: PhantomData<D>,
-        rx_resource_holder: Option<ResourceHolder<D>>,
         mclk: &'a mut Mclk,
         periph_clock_freq: Hertz,
         mode: PhantomData<M>,
     }
 
-    impl<'a, D> AtsamdEdgeTriggerCapture<'a, D, OtTx, VEC_SIZE_CAPTURE>
+    impl<'a, D, T> AtsamdEdgeTriggerCapture<'a, D, T, OtTx, VEC_SIZE_CAPTURE>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
         pub fn new_with_default(
             pin_tx: GpioPin<PB09, PushPullOutput>,
             pin_rx: GpioPin<PB08, PullUpInput>,
-            tc4_timer: pac::Tc4,
+            tc_timer: T,
             mclk: &'a mut Mclk,
             tc4_tc5_clock: &Tc4Tc5Clock,
             dma_channel: D,
-        ) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, VEC_SIZE_CAPTURE> {
+        ) -> AtsamdEdgeTriggerCapture<'a, D, T, OtTx, VEC_SIZE_CAPTURE> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
             let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
                 tc4_tc5_clock.freq(),
                 Hertz::from_raw(32),
-                tc4_timer,
+                tc_timer,
                 TC4Pinout::Pb9(pwm_tx_pin),
                 mclk,
             )
@@ -168,7 +160,6 @@ mod boiler_implementation {
                 pwm: Some(pwm4),
                 capture_device: None,
                 dma: PhantomData,
-                rx_resource_holder: None,
                 mclk: mclk,
                 periph_clock_freq: tc4_tc5_clock.freq(),
                 mode: PhantomData,
@@ -176,7 +167,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
+    impl<'a, D, T, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -184,17 +175,17 @@ mod boiler_implementation {
         pub fn new(
             pin_tx: GpioPin<PB09, PushPullOutput>,
             pin_rx: GpioPin<PB08, PullUpInput>,
-            tc4_timer: pac::Tc4,
+            tc_timer: T,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
             dma_channel: D,
-        ) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, N> {
+        ) -> AtsamdEdgeTriggerCapture<'a, D, T, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
             let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
                 periph_clock_freq,
                 Hertz::from_raw(32),
-                tc4_timer,
+                tc_timer,
                 TC4Pinout::Pb9(pwm_tx_pin),
                 mclk,
             )
@@ -207,7 +198,6 @@ mod boiler_implementation {
                 pwm: Some(pwm4),
                 capture_device: None,
                 dma: PhantomData,
-                rx_resource_holder: None,
                 mclk: mclk,
                 periph_clock_freq: periph_clock_freq,
                 mode: PhantomData,
@@ -215,22 +205,22 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> EdgeTriggerTransitiveToCaptureCapable<N>
-        for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
+    impl<'a, D, T, const N: usize> EdgeTriggerTransitiveToCaptureCapable<N>
+        for AtsamdEdgeTriggerCapture<'a, D, T, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
-        type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, OtRx, N>;
+        type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, T, OtRx, N>;
         fn transition_to_capture_capable_device(self) -> Self::CaptureDevice {
             let pwm = self.pwm.unwrap();
-            let (dma, tc4_timer, pinout) = pwm.decompose();
+            let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_tx = pinout.collapse();
             let pin_tx = pin_tx.into_push_pull_output();
 
-            AtsamdEdgeTriggerCapture::<'a, D, OtRx, N>::new(
+            AtsamdEdgeTriggerCapture::<'a, D, T, OtRx, N>::new(
                 pin_tx.into(),
                 self.rx_pin.unwrap(),
-                tc4_timer,
+                tc_timer,
                 self.mclk,
                 self.periph_clock_freq,
                 dma,
@@ -238,26 +228,26 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> EdgeCaptureTransitiveToTriggerCapable<N>
-        for AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
+    impl<'a, D, T, const N: usize> EdgeCaptureTransitiveToTriggerCapable<N>
+        for AtsamdEdgeTriggerCapture<'a, D, T, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
-        type TriggerDevice = AtsamdEdgeTriggerCapture<'a, D, OtTx, N>;
-        fn transition_to_trigger_capable_device(self) -> AtsamdEdgeTriggerCapture<'a, D, OtTx, N> {
+        type TriggerDevice = AtsamdEdgeTriggerCapture<'a, D, T, OtTx, N>;
+        fn transition_to_trigger_capable_device(self) -> AtsamdEdgeTriggerCapture<'a, D, T, OtTx, N> {
             let (pin_tx, capture_timer) = (
                 self.tx_pin.unwrap(),
                 self.capture_device.unwrap(),
             );
-            let (dma, tc4_timer, pinout_rx) = capture_timer.decompose();
-        //      let (dma, tc4_timer, pinout) = pwm.decompose();
+            let (dma, tc_timer, pinout_rx) = capture_timer.decompose();
+        //      let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_rx = pinout_rx.collapse();
             let pin_rx = pin_rx.into_pull_up_input();
 
-            AtsamdEdgeTriggerCapture::<'a, D, OtTx, N>::new(
+            AtsamdEdgeTriggerCapture::<'a, D, T, OtTx, N>::new(
                 pin_tx.into(),
                 pin_rx.into(),
-                tc4_timer,
+                tc_timer,
                 self.mclk,
                 self.periph_clock_freq,
                 dma,
@@ -265,14 +255,14 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
+    impl<'a, D, T, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
         pub fn new(
             pin_tx: GpioPin<PB09, PushPullOutput>,
             pin_rx: GpioPin<PB08, PullUpInput>,
-            tc4_timer: pac::Tc4,
+            tc_timer: T,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
             dma_channel: D,
@@ -282,7 +272,7 @@ mod boiler_implementation {
             let timer_capture_4 = TimerCapture4::<PB08>::new_timer_capture(
                 periph_clock_freq,
                 Hertz::from_raw(32),
-                tc4_timer,
+                tc_timer,
                 TC4Pinout::Pb8(pwm_rx_pin),
                 mclk,
             )
@@ -295,7 +285,6 @@ mod boiler_implementation {
                 pwm: None,
                 capture_device: Some(timer_capture_4), //  TODO: Implement the capture device
                 dma: PhantomData,
-                rx_resource_holder: None,
                 mclk: mclk,
                 periph_clock_freq: periph_clock_freq,
                 mode: PhantomData,
@@ -336,7 +325,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, OtTx, N>
+    impl<'a, D, T, const N: usize> EdgeTriggerInterface for AtsamdEdgeTriggerCapture<'a, D, T, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -373,7 +362,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'a, D, OtRx, N>
+    impl<'a, D, T, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'a, D, T, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
     {
@@ -640,6 +629,26 @@ async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp:
     }
 }
 
+#[embassy_executor::task]
+async fn full_boiler_opentherm_simulation(mut tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>, 
+    timer: pac::Tc2, dma_channel: hal::dmac::Channel<hal::dmac::Ch1, ReadyFuture>, 
+    mclk: &'static mut Mclk,
+    timer_clocks: &'static Tc2Tc3Clock)
+{
+    // let mut edge_trigger_capture_dev =
+    //     boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
+    //         tx_pin,
+    //         rx_pin,
+    //         timer,
+    //         &mclk,
+    //         &timer_clocks,
+    //         dma_channel,
+    //     );
+    loop {
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+    }
+}
+
 #[embassy_executor::main]
 async fn main(spawner: embassy_executor::Spawner) {
     let mut peripherals = pac::Peripherals::take().unwrap();
@@ -648,13 +657,8 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let pins = Pins::new(peripherals.port);
     let dev_dependency_tx_simulation_pin: GpioPin<PA17, Output<PushPull>> = pins.pa17.into_push_pull_output();
+    let dev_dependency_rx_simulation_pin: GpioPin<PA16, Input<Floating>> = pins.pa16.into_floating_input();
     let receiver = CHANNEL.receiver();
-    //async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>, receiver: u32);
-    #[cfg(feature = "use_opentherm")]
-    spawner.spawn(simulate_opentherm_tx(dev_dependency_tx_simulation_pin, receiver)).unwrap();
-
-    #[cfg(feature = "use_opentherm")]
-    spawner.spawn(boiler_task()).unwrap();
 
     let mut clocks = GenericClockController::with_external_32kosc(
         peripherals.gclk,
@@ -676,7 +680,20 @@ async fn main(spawner: embassy_executor::Spawner) {
     let channels = dmac.split();
     // Initialize DMA Channels 0 and 1
     let mut channel0 = channels.0.init(PriorityLevel::Lvl0);
-    let channel1 = channels.1.init(PriorityLevel::Lvl0);
+    let mut channel1 = channels.1.init(PriorityLevel::Lvl0);
+
+    let tc2_timer = peripherals.tc2;
+
+
+    #[cfg(feature = "use_opentherm")]
+    spawner.spawn(full_boiler_opentherm_simulation(dev_dependency_tx_simulation_pin, 
+        dev_dependency_rx_simulation_pin, 
+        tc2_timer, channel1, &mut peripherals.mclk,
+        &clocks.tc2_tc3(&gclk0).unwrap(),
+    )).unwrap();
+    //  #[cfg(feature = "use_opentherm")]
+    //  spawner.spawn(simulate_opentherm_tx(dev_dependency_tx_simulation_pin, receiver)).unwrap();
+
 
     let mut pwm_tx_pin = pins.pb09.into_push_pull_output();
     //  Set initial level of OpenTherm bus to high:
