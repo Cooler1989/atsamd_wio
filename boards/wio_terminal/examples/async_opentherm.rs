@@ -62,6 +62,7 @@ use boiler::opentherm_interface::{
     open_therm_message::{CHState, Temperature, OpenThermMessage},
     OpenThermEdgeTriggerBus,
     SendOpenThermMessage,
+    ListenOpenThermMessage,
 };
 #[cfg(feature = "use_opentherm")]
 use boiler::{BoilerControl, Instant, TimeBaseRef};
@@ -765,6 +766,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
         let (rx_device, result) =
             device.start_capture(dur, dur).await;
+
         if let Ok((level, vector)) = result {
             hprintln!("Capture finished with: {}", vector.len()).ok();
             let differences: Vec<u128, 128> = vector
@@ -775,6 +777,23 @@ async fn main(spawner: embassy_executor::Spawner) {
             //  for (i, v) in differences.into_iter().enumerate() {
             //      hprintln!("{}:{} us", i, v).ok();
             //  }
+        }
+        hprintln!("Finish Capture {}", count_iterations).ok();
+        Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+
+        hprintln!("Start FullOpentherm Capture {}", count_iterations).ok();
+        let dur = Duration::from_millis(100);
+        // trigger gpio simulation of the OpenTherm TX message
+        sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
+        let (rx_device, result) =
+            rx_device.listen_open_therm_message().await;
+        if let Ok(message) = result {
+            hprintln!("Capture finished with opentherm message: {}", message).ok();
+        }
+        else
+        {
+            //  TODO: extend the analysis of what is wrong with this capture here:
+            hprintln!("Capture finished with error on OpenThermMessage").ok();
         }
         hprintln!("Finish Capture {}", count_iterations).ok();
         Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
