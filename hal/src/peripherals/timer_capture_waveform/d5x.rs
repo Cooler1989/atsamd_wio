@@ -4,7 +4,6 @@ use core::future::Future;
 use core::sync::atomic;
 
 use atsamd_hal_macros::hal_cfg;
-use waker::INTERRUPT_FIRED;
 
 use crate::typelevel;
 use crate::pac;
@@ -70,6 +69,14 @@ struct TimerCaptureDmaWrapper<'a, DmaFut, T> {
     _timer: &'a T,
 }
 
+pub struct CounterValueAtTermination(u32);
+
+impl CounterValueAtTermination {
+    pub fn get_raw_value(self) -> u32 {
+        self.0
+    }
+}
+
 impl<'a, DmaFut, T> TimerCaptureDmaWrapper<'a, DmaFut, T> {
     fn new(dma_future: DmaFut, timer: &'a T, tc_index: usize) -> Self {
         Self { _dma_future: dma_future, timer_started: false, tc_waker_index:tc_index, _timer: timer }
@@ -81,36 +88,43 @@ where
     DmaFut: core::future::Future<Output = Result<(), DmacError>>,
     T: TimerCounterStart,
 {
-    type Output = Result<(), DmacError>;
+    type Output = Result<CounterValueAtTermination, DmacError>;
 
     fn poll(
         mut self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
     ) -> core::task::Poll<Self::Output> {
+        use waker::MC1_INTERRUPT_FIRED;
+
         //  let mut pinned = core::pin::pin!(self);
         let this = self.as_mut().project();
 
         //  First time the future is polled, it sets enable bit of DMA. Only after that the timer shall be started.
         let result = this._dma_future.poll(cx);
         if result == core::task::Poll::Ready(Ok(())) {
+            this._timer.stop();
             this._timer.disable_interrupt();
+            let counter_value = this._timer.counter_value();
             //  TODO: add check on the mc1 flag related to timeout
-            return result;
+            return core::task::Poll::Ready(Ok(CounterValueAtTermination(counter_value)));
         }
 
         if *this.timer_started == false {
             //  let result = this._dma_future.poll(cx);
             *this.timer_started = true;
-            INTERRUPT_FIRED[*this.tc_waker_index].store(false, atomic::Ordering::Relaxed);
+            MC1_INTERRUPT_FIRED[*this.tc_waker_index].store(false, atomic::Ordering::Relaxed);
             //  TODO: Enable interrupts of the timer
             this._timer.start();
             // Enable the NVIC interrupt:
             this._timer.enable_interrupt();
         }
 
-        let result = if INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
+        let result = if MC1_INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
+            //  counter_value
+            this._timer.stop();
             this._timer.disable_interrupt();
-            core::task::Poll::Ready(Ok(()))
+            let counter_value = this._timer.counter_value();
+            core::task::Poll::Ready(Ok(CounterValueAtTermination(counter_value)))
         } else {
             use waker::WAKERS;
             //  TODO: Do I have to disable interrupt/ put registartion into critical section?
@@ -121,7 +135,6 @@ where
             //  This is not very efficient but it is simpler.
             core::task::Poll::Pending
         };
-
         result
     }
 }
@@ -200,8 +213,8 @@ impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHan
         if intflag.read().mc1().bit_is_set() {
             // Clear the flag
             intflag.modify(|_, w| w.mc1().set_bit());
-            use waker::{WAKERS, INTERRUPT_FIRED};
-            INTERRUPT_FIRED[T::WAKER_IDX].store(true, atomic::Ordering::Relaxed);
+            use waker::{WAKERS, MC1_INTERRUPT_FIRED};
+            MC1_INTERRUPT_FIRED[T::WAKER_IDX].store(true, atomic::Ordering::Relaxed);
             WAKERS[T::WAKER_IDX].wake();
         }
     }
@@ -289,7 +302,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         while count.syncbusy().read().enable().bit_is_set() {}
     }
 
-    pub async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) -> Result<(),DmacError> {
+    /// The capture_memorys first element will be the value of the counter at the moment of the first event. The timer starts counting from zero, which mean the first period can be assumed as the value of the first element in the memory.
+    pub async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) -> Result<CounterValueAtTermination,DmacError> {
 
         let count = self.base_pwm.tc.count32();
 
@@ -431,6 +445,12 @@ impl<I: PinId> $TYPE<I> {
         while count.syncbusy().read().enable().bit_is_set() {}
     }
 
+    pub fn stop(&self){
+        let count = self.tc.count32();
+        count.ctrla().modify(|_, w| w.enable().clear_bit());
+        while count.syncbusy().read().enable().bit_is_set() {}
+    }
+
     pub fn GetDmaPtr(tc: crate::pac::$TC) -> TimerCaptureWaveformSourcePtr<u32> {
         TimerCaptureWaveformSourcePtr(tc.count32().cc(TIMER_CHANNEL).as_ptr() as *mut _)
     }
@@ -446,6 +466,10 @@ impl<I: PinId> TimerCounterStart for $TYPE<I> {
     fn start(&self)
     {
         self.start();
+    }
+    fn stop(&self)
+    {
+        self.stop();
     }
     fn is_mc1_interrupt_active(&self) -> bool {
         let count = self.tc.count32();
@@ -463,6 +487,13 @@ impl<I: PinId> TimerCounterStart for $TYPE<I> {
         unsafe {
             Self::Interrupt::disable();
         }
+    }
+    fn counter_value(&self) -> u32
+    {
+        //  trigger counter value read:
+        let _ = self.tc.count32().ctrlbset().write(|w| w.cmd().readsync());
+        // return counter value:
+        self.tc.count32().count().read().bits()
     }
 }
 
@@ -492,9 +523,11 @@ create_timer_capture! { TimerCapture7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, t
 trait TimerCounterStart {
     type Interrupt: Interrupt;
     fn start(&self);
+    fn stop(&self);
     fn is_mc1_interrupt_active(&self) -> bool;
     fn enable_interrupt(&self);
     fn disable_interrupt(&self);
+    fn counter_value(&self) -> u32;
 }
 
 const MAX_TIMER_COUNT: usize = 8;
@@ -513,7 +546,7 @@ mod waker {
     pub(super) static WAKERS: [AtomicWaker; MAX_TIMER_COUNT] =
         [NEW_WAKER; MAX_TIMER_COUNT];
     const NEW_INTERRUP_FIRED: AtomicBool = AtomicBool::new(false);
-    pub(super) static INTERRUPT_FIRED: [AtomicBool; MAX_TIMER_COUNT] =
+    pub(super) static MC1_INTERRUPT_FIRED: [AtomicBool; MAX_TIMER_COUNT] =
         [NEW_INTERRUP_FIRED; MAX_TIMER_COUNT];
 }
 
