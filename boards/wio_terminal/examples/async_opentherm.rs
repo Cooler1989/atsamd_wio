@@ -392,20 +392,27 @@ mod boiler_implementation {
             //  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
 
             let mut capture_memory: [u32; N] = [0; N];
-            let _result = self.capture_device
+            let result = self.capture_device
                 .as_mut()
                 .unwrap()
                 .start_timer_prepare_dma_transfer(&mut capture_memory).await;
                 //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
-
-            let mut timestamps = Vec::<core::time::Duration, N>::new();
-            for value in capture_memory.iter() {
-                //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
-                if *value > 0 {
-                    let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
+            if let Ok(timer_value_at_termination) = result {
+                let mut timestamps = Vec::<core::time::Duration, N>::new();
+                //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
+                let _ = timestamps.push(core::time::Duration::from_micros(0u64));
+                for value in capture_memory.iter() {
+                    //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
+                    if *value > 0 {
+                        let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
+                    }
                 }
+                let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
+                (self, Ok((InitLevel::High, timestamps)))
             }
-            (self, Ok((InitLevel::High, timestamps)))
+            else {
+                return (self, Err(CaptureError::GenericError));
+            }
         }
     }
 
