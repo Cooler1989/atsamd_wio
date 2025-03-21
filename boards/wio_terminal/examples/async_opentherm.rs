@@ -11,6 +11,7 @@ use hal::fugit::MillisDuration;
 use heapless::Vec;
 use panic_probe as _;
 
+use embassy_futures::join;
 use embassy_sync::channel::{Channel, Receiver};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 
@@ -109,6 +110,10 @@ mod boiler_implementation {
 
     use super::*;
 
+    trait AtsamdEdgeTriggerCaptureFactory{
+    
+    }
+
     const VEC_SIZE_CAPTURE: usize = 128;
     pub(super) struct AtsamdEdgeTriggerCapture<
         'a,
@@ -127,6 +132,7 @@ mod boiler_implementation {
         dma: PhantomData<D>,
         mclk: &'a mut Mclk,
         periph_clock_freq: Hertz,
+        timer_type: PhantomData<T>,
         mode: PhantomData<M>,
     }
 
@@ -684,13 +690,24 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let tc2_timer = peripherals.tc2;
 
+    //  #[cfg(feature = "use_opentherm")]
+    //  let mut simulator_edge_trigger_capture_dev =
+    //      boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
+    //          dev_dependency_tx_simulation_pin,
+    //          dev_dependency_rx_simulation_pin,
+    //          tc2_timer,
+    //          &mut peripherals.mclk,
+    //          &clocks.tc2_tc3(&gclk0).unwrap(),
+    //          channel0,
+    //      );
 
-    #[cfg(feature = "use_opentherm")]
-    spawner.spawn(full_boiler_opentherm_simulation(dev_dependency_tx_simulation_pin, 
-        dev_dependency_rx_simulation_pin, 
-        tc2_timer, channel1, &mut peripherals.mclk,
-        &clocks.tc2_tc3(&gclk0).unwrap(),
-    )).unwrap();
+    //  #[cfg(feature = "use_opentherm")]
+    //  spawner.spawn(full_boiler_opentherm_simulation(dev_dependency_tx_simulation_pin, 
+    //      dev_dependency_rx_simulation_pin, 
+    //      tc2_timer, channel1, 
+    //      &mut peripherals.mclk,
+    //      &clocks.tc2_tc3(&gclk0).unwrap(),
+    //  )).unwrap();
     //  #[cfg(feature = "use_opentherm")]
     //  spawner.spawn(simulate_opentherm_tx(dev_dependency_tx_simulation_pin, receiver)).unwrap();
 
@@ -714,19 +731,6 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     spawner.spawn(print_capture_timer_state_task()).unwrap();
 
-    //  DMA setup:
-    let mut source = [0xffu8; 65];
-    //  for (index, value) in source.iter_mut().enumerate() {
-    //      *value = index as u8;
-    //  }
-    source
-        .iter_mut()
-        .enumerate()
-        .filter(|(i, _)| i % 2 == 0) //  take every second element
-        .for_each(|(i, v)| {
-            *v = 0x00u8;
-        });
-
     #[cfg(feature = "use_opentherm")]
     let mut edge_trigger_capture_dev =
         boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
@@ -738,7 +742,18 @@ async fn main(spawner: embassy_executor::Spawner) {
             channel0,
         );
 
-    let _time_driver = boiler_implementation::AtsamdTimeDriver::new();
+    #[cfg(feature = "use_opentherm")]
+    let mut edge_trigger_capture_simultion_device =
+        boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
+            dev_dependency_tx_simulation_pin,
+            dev_dependency_rx_simulation_pin,
+            tc2_timer,
+            &mut peripherals.mclk,
+            &clocks.tc2_tc3(&gclk0).unwrap(),
+            channel1,
+        );
+
+    //  let _time_driver = boiler_implementation::AtsamdTimeDriver::new();
     //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
     //  let _ = boiler_controller.set_point(Temperature::Celsius(16));
 
@@ -749,23 +764,28 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     hprintln!("main:: loop{} start:").ok();
 
-    let (device, result) = edge_trigger_capture_dev
-        .trigger(
-            [
-                true, true, true, true, false, true, false, true, false, false, true, false,
-                false, true, true, true,
-            ]
-            .iter()
-            .copied(),
-            Duration::from_millis(100),
-        )
-        .await;
-    result.unwrap();
-
     let mut edge_trigger_capture_dev = device.transition_to_capture_capable_device();
     let sender_trigger_tx_sequence = CHANNEL.sender();
 
     Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
+    
+    //  Test one round of TX(simulation) -> RX(production)
+    let tx_async =  async { 
+        sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await; 
+        let dur = Duration::from_millis(100);
+        let (device, result) =
+            edge_trigger_capture_simultion_device.start_capture(dur, dur).await;
+    };
+
+    let rx_async = async {
+        let dur = Duration::from_millis(100);
+        let (tx_device, result) =
+            edge_trigger_capture_dev.send_open_therm_message(
+                OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
+    };
+
+    embassy_futures::join::join(tx_async, rx_async).await;
+
 
     let time_d = core::time::Duration::from_millis(100);
     let time_d :u32 = time_d.as_millis().try_into().unwrap();
