@@ -37,24 +37,8 @@ unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
     }
 }
 
-//  impl<P, M, Z, D, R, T> Spi<Config<P, M, Z>, D, R, T>
-//  where
-//      P: ValidPads,
-//      M: OpMode,
-//      Z: Size,
-//      Config<P, M, Z>: ValidConfig,
-//      D: Capability,
-//      Z::Word: Beat,
-//  {
-//      #[inline]
-//      pub(in super::super) fn sercom_ptr(&self) -> SercomPtr<Z::Word> {
-//          SercomPtr(self.config.regs.spi().data().as_ptr() as *mut _)
-//      }
-//  }
-
 // Timer/Counter (TCx)
 //
-
 macro_rules! pwm_wg {
     ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident, $event:ident)),+) => {
         $(
@@ -123,22 +107,6 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
         count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
 
-        // Disable the timer when DMA transfer is done.
-        //  count.ctrla().modify(|_, w| w.enable().clear_bit());
-        //  while count.syncbusy().read().enable().bit_is_set() {}
-        //  count.ctrla().write(|w| w.swrst().set_bit());
-        //  while count.ctrla().read().bits() & 1 != 0 {}
-
-        //  let Self{base_pwm, _channel} = self;
-        //  let $TYPE{..} = self.base_pwm;
-
-        //  pub struct $TYPE<I: PinId> {
-        //    clock_freq: Hertz,
-        //    tc: crate::pac::$TC,
-        //    pinout: $pinout<I>,
-        //  }
-        // [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>
-
         value_to_return
     }
 
@@ -183,8 +151,6 @@ impl<I: PinId> $TYPE<I> {
         while count.ctrla().read().bits() & 1 != 0 {}
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
-        //  TODO:  resolve copen1 question:
-        //  count.ctrla().modify(|_, w| w.copen1().set_bit());
         count.ctrla().modify(|_, w| w.mode().count8());
         count.ctrla().modify(|_, w| {
             w.prescaler().div256()
@@ -200,7 +166,6 @@ impl<I: PinId> $TYPE<I> {
             //      _ => unreachable!(),
             //  }
         });
-        //  count.ctrla().write(|w| w.count8());
 
         count.count().write(|w| unsafe { w.bits(233u8) });
         count.per().write(|w| unsafe { w.bits(233u8) });
@@ -306,7 +271,6 @@ impl<I: PinId> $crate::ehal::pwm::SetDutyCycle for $TYPE<I> {
         Ok(())
     }
 }
-
 
 impl<I: PinId> $crate::ehal_02::PwmPin for $TYPE<I> {
     type Duty = u16;
