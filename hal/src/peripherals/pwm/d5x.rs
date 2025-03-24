@@ -44,7 +44,7 @@ macro_rules! impl_tc_pinout {
             $( #[$attr] )?
             impl $Type<$Id> {
                 #[inline]
-                pub fn $func(pin: impl AnyPin<Id = $Id>) -> Self {
+                pub fn new_pin(pin: impl AnyPin<Id = $Id>) -> Self {
                     let _pin = pin.into().into_alternate();
                     Self { _pin }
                 }
