@@ -11,6 +11,10 @@ use crate::timer_params::TimerParams;
 
 // Timer/Counter (TCx)
 
+pub trait PinoutCollapse {
+    type Pin;
+    fn collapse(self) -> Self::Pin;
+}
 /// This is a major syntax hack.
 ///
 /// The previous Pinout types were enums that took specific v1::Pin types. As a
@@ -39,19 +43,29 @@ macro_rules! impl_tc_pinout {
         pub struct $Type<I: PinId> {
             _pin: Pin<I, AlternateE>,
         }
+        impl<I: PinId> PinoutCollapse for $Type<I> {
+            type Pin = Pin<I, AlternateE>;
+            fn collapse(self) -> Pin<I, AlternateE> {
+                self._pin
+            } 
+        }
 
         $(
             $( #[$attr] )?
-            impl $Type<$Id> {
+            impl $Type<$Id> {  // those are specializations similar to C++ template specializations 
                 #[inline]
                 pub fn new_pin(pin: impl AnyPin<Id = $Id>) -> Self {
                     let _pin = pin.into().into_alternate();
                     Self { _pin }
                 }
-                pub fn collapse(self) -> Pin<$Id, AlternateE> {
-                    self._pin
-                }
             }
+            //  Where should this be implemented? TODO:
+            //  $( #[$attr] )?
+            //  impl PinoutCollapse for $Type<$Id> {  // those are specializations similar to C++ template specializations 
+            //      fn collapse(self) -> Pin<$Id, AlternateE> {
+            //          self._pin
+            //      }
+            //  }
         )+
     };
 }
