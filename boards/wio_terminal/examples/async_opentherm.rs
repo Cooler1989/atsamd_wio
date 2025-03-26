@@ -42,8 +42,6 @@ use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 use bsp::pins::UserLed;
 use wio_terminal as bsp;
 
-use core::future::Future;
-use core::pin::Pin;
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use rtic_monotonics::Monotonic;
 
@@ -101,10 +99,12 @@ async fn boiler_task() {}
 #[cfg(feature = "use_opentherm")]
 mod boiler_implementation {
     use crate::dmac::ReadyFuture;
-    use crate::hal::pwm_wg::PwmWg4Future;
+    use crate::hal::pwm_wg::{PwmWg4Future};
     use atsamd_hal::gpio::{Alternate, PullUpInput, pin::AnyPin};
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
+    use atsamd_hal::pwm_wg::PwmWgFutureTrait;
+    use atsamd_hal::pwm_wg::PinoutCollapse;
     use fugit::MicrosDuration;
     use core::any::Any;
     use core::marker::PhantomData;
@@ -117,12 +117,22 @@ mod boiler_implementation {
 
     const VEC_SIZE_CAPTURE: usize = 128;
 
+    trait PwmWgTrait {
+        type DmaChannel;
+        type Timer;
+        type PinoutTx: PinoutCollapse;
+        //  fn start_regular_pwm(&mut self, duty: u8);
+        //  fn start_timer_prepare_dma_transfer(&mut self, duty: u8, source: &mut [u8; VEC_SIZE_CAPTURE]) -> ReadyFuture;
+        fn decompose(self) -> (Self::DmaChannel, Self::Timer, Self::PinoutTx);
+    }
+
     pub(super) trait CreatePwmPinout {
+        type PinId: PinId;
         type PinTx: AnyPin;
-        type PinoutTx;
+        type PinoutTx: PinoutCollapse;
         type DmaChannel;
         type PwmBase;
-        type PwmWg;
+        type PwmWg: PwmWgFutureTrait;
         type Timer;
         fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &'a mut Mclk) -> Self::PwmWg;
         fn collapse(self) -> Self::PinTx;
@@ -171,8 +181,10 @@ mod boiler_implementation {
         ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into().into_alternate::<E>();
 
-            let pwm = PinoutSpecificData::new_pwm_generator(
-                pwm_tx_pin, tc_timer, dma_channel, mclk);
+            todo!();
+            //  let pwm = PinoutSpecificData::new_pwm_generator(
+            //      pwm_tx_pin, tc_timer, dma_channel, mclk);
+
             //  Move this to the factory:
             //   let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
             //       input_clock_frequency,
@@ -183,19 +195,19 @@ mod boiler_implementation {
             //   )
             //   .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
                                             // just for prototyping
-            Self {
-                tx_pin: None,
-                rx_pin: Some(pin_rx),
-                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-                pwm: Some(pwm),
-                capture_device: None,
-                dma: PhantomData,
-                mclk: mclk,
-                periph_clock_freq: input_clock_frequency,
-                timer_type: PhantomData,
-                mode: PhantomData,
-                pinout: PhantomData,
-            }
+            //  Self {
+            //      tx_pin: None,
+            //      rx_pin: Some(pin_rx),
+            //      tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+            //      pwm: Some(pwm),
+            //      capture_device: None,
+            //      dma: PhantomData,
+            //      mclk: mclk,
+            //      periph_clock_freq: input_clock_frequency,
+            //      timer_type: PhantomData,
+            //      mode: PhantomData,
+            //      pinout: PhantomData,
+            //  }
         }
     }
 
@@ -215,9 +227,10 @@ mod boiler_implementation {
             periph_clock_freq: Hertz,
             dma_channel: D,
         ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
-            let pwm_tx_pin = pin_tx.into_alternate::<E>();
+            let pwm_tx_pin = pin_tx.into().into_alternate::<E>();
 
-            let pwm = PinoutSpecificData::new_pin(pwm_tx_pin, tc_timer, mclk).with_dma_channel(dma_channel);
+            todo!();
+            //  let pwm = PinoutSpecificData::new_pin(pwm_tx_pin, tc_timer, mclk).with_dma_channel(dma_channel);
             //  let pwm = PwmWg4::<PB09>::new_waveform_generator(
             //      periph_clock_freq,
             //      Hertz::from_raw(32),
@@ -227,17 +240,18 @@ mod boiler_implementation {
             //  )
             //  .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
                                             // just for prototyping
-            Self {
-                tx_pin: None,
-                rx_pin: Some(pin_rx),
-                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-                pwm: Some(pwm),
-                capture_device: None,
-                dma: PhantomData,
-                mclk: mclk,
-                periph_clock_freq: periph_clock_freq,
-                mode: PhantomData,
-            }
+            // Self {
+            //     tx_pin: None,
+            //     rx_pin: Some(pin_rx),
+            //     tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+            //     pwm: Some(pwm),
+            //     capture_device: None,
+            //     dma: PhantomData,
+            //     mclk: mclk,
+            //     periph_clock_freq: periph_clock_freq,
+            //     timer_type: PhantomData,
+            //     mode: PhantomData,
+            // }
         }
     }
 
@@ -287,8 +301,8 @@ mod boiler_implementation {
             let pin_rx = pin_rx.into_pull_up_input();
 
             AtsamdEdgeTriggerCapture::<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>::new(
-                pin_tx.into(),
-                pin_rx.into(),
+                pin_tx,
+                pin_rx,
                 tc_timer,
                 self.mclk,
                 self.periph_clock_freq,
@@ -364,15 +378,16 @@ mod boiler_implementation {
                         let level = if value { 0xffu8 } else { 0x00u8 };
                         source[idx] = level;
                     }
+                    todo!();
                     //  return:
                     //  TODO: Actually use the period to set the PWM frequency
-                    pwm.start_regular_pwm(self.tx_init_duty_value);
-                    let dma_future = self
-                        .pwm
-                        .as_mut()
-                        .unwrap() /* TODO: remove runtime panic */
-                        .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
-                    dma_future.await.map_err(|_| TriggerError::GenericError)
+                    //  pwm.start_regular_pwm(self.tx_init_duty_value);
+                    //  let dma_future = self
+                    //      .pwm
+                    //      .as_mut()
+                    //      .unwrap() /* TODO: remove runtime panic */
+                    //      .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
+                    //  dma_future.await.map_err(|_| TriggerError::GenericError)
                 }
                 None => Err(TriggerError::GenericError),
             };
@@ -553,156 +568,6 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
     }
 }
 
-/// The idea here is to use simpler to implement TX driver using gpio timer to ease on
-/// implementation of the OpenTherm RX driver based on timer + DMA
-#[embassy_executor::task]
-async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
-    receiver: Receiver<'static, ThreadModeRawMutex, SignalTxSimulation, 64>)
-{
-    let hw_dev = boiler_implementation::AtsamdGpioEdgeTriggerDev::new(tx_pin);
-    const DURATION_MS: u32 = 500;
-
-    // Give it some time before fire-up the
-    Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
-    //  TODO: implement heapless queue receiving requests
-    let mut pass_dev_in_loop = hw_dev;
-    loop {
-        //  Comment this out to have on demand instead of periodic transfer:
-        let _received = receiver.receive().await;
-
-        //  hprintln!("channel::RX").ok();
-        //  tx_pin.toggle().unwrap();
-        //  Wait for the receiver to be ready, give it some time to setup the capture
-        Mono::delay(MillisDuration::<u32>::from_ticks(10).convert()).await;
-        //  The device implements the trigger interface, it shall implement send as well:
-        let (dev, result) =
-            pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
-        pass_dev_in_loop = dev;
-        //  Mono::delay(MillisDuration::<u32>::from_ticks(DURATION_MS).convert()).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
-{
-    let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
-    let count32 = tc4_readonly .count32();
-    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
-    //  let mut value_cc1 = 0x00u8;
-    loop {
-        //  Read this value:
-        //  let vcc1 = tc4_readonly.count8().cc(1).read().bits();
-        //  if vcc1 != value_cc1 {
-        //      hprintln!("tc4.cc1:0x{:08X}", vcc1).ok();
-        //      value_cc1 = vcc1;
-        //  }
-
-        //  uart_tx.write(b"Hello, world!").await.unwrap();
-        //  defmt::info!("Sent 10 bytes");
-
-        //  let mut delay = Delay::new(core.SYST, &mut clocks);
-        { //  Read counter one by one to see if it is running:
-            let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
-            let cnt_value = count32.count().read().bits();
-            let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
-            let cn2_value = count32.count().read().bits();
-            //  hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
-        }
-
-        hprintln!("tc4int:0x{:08X}", count32.intflag().read().bits()).ok();
-        //  hprintln!("tc4cc0:0x{:08X}", count32.cc(0).read().bits()).ok();
-        //hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
-        //hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
-        //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
-        //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().bits()).ok();
-        // let btcnt = dmac_readonly.active().read().btcnt() ).ok();
-        //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().btcnt().bits() ).ok();
-        //hprintln!("dmactrl:0x{:08X}", dmac_readonly.ctrl().read().bits()).ok();
-        //hprintln!("dmabusy:0x{:08X}", dmac_readonly.busych().read().bits()).ok();
-        //hprintln!("dmachint:0x{:08X}", dmac_readonly.intstatus().read().bits()).ok();
-        //hprintln!("dmachintpend:0x{:08X}", dmac_readonly.intpend().read().bits()).ok();
-        //hprintln!("ch[0]chctrla:0x{:08X}", dmac_readonly.channel(0).chctrla().read().bits()).ok();
-        //hprintln!("ch[0]chint:0x{:08X}", dmac_readonly.channel(0).chintflag().read().bits()).ok();
-        //hprintln!("ch[0]chstat:0x{:08X}", dmac_readonly.channel(0).chstatus().read().bits()).ok();
-
-        //  let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
-        //  if check_and_clear_interrupts(flags_to_check).ovf() {
-        //      //  hprintln!("Overflow detected").ok();
-        //  }
-
-        //  delay.delay_ms(200u16);
-        Mono::delay(MillisDuration::<u32>::from_ticks(2000).convert()).await;
-    }
-}
-#[embassy_executor::task]
-async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
-{
-    let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
-    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
-    let mut value_cc1 = 0x00u8;
-    loop {
-        //  Read this value:
-        let vcc1 = tc4_readonly.count8().cc(1).read().bits();
-        if vcc1 != value_cc1 {
-            hprintln!("tc4.cc1:0x{:08X}", vcc1).ok();
-            value_cc1 = vcc1;
-        }
-
-        //  uart_tx.write(b"Hello, world!").await.unwrap();
-        //  defmt::info!("Sent 10 bytes");
-
-        //  let mut delay = Delay::new(core.SYST, &mut clocks);
-        let _ = tc4_readonly
-            .count8()
-            .ctrlbset()
-            .write(|w| w.cmd().readsync());
-        let cnt_value = tc4_readonly.count8().count().read().bits();
-        let _ = tc4_readonly
-            .count8()
-            .ctrlbset()
-            .write(|w| w.cmd().readsync());
-        let cn2_value = tc4_readonly.count8().count().read().bits();
-
-        hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
-        //  hprintln!(
-        //      "tc4int:0x{:08X}, cc1:0x{:08X}",
-        //      tc4_readonly.count8().intflag().read().bits(),
-        //      tc4_readonly.count8().cc(1).read().bits()
-        //  )
-        //  .ok();
-        //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
-        //  hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
-
-        let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
-        if check_and_clear_interrupts(flags_to_check).ovf() {
-            //  hprintln!("Overflow detected").ok();
-        }
-
-        //  delay.delay_ms(200u16);
-        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn full_boiler_opentherm_simulation(mut tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>, 
-    timer: pac::Tc2, dma_channel: hal::dmac::Channel<hal::dmac::Ch1, ReadyFuture>, 
-    mclk: &'static mut Mclk,
-    timer_clocks: &'static Tc2Tc3Clock)
-{
-    // let mut edge_trigger_capture_dev =
-    //     boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
-    //         tx_pin,
-    //         rx_pin,
-    //         timer,
-    //         &mclk,
-    //         &timer_clocks,
-    //         dma_channel,
-    //     );
-    loop {
-        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
-    }
-}
-
 mod timer4_data_set {
 use crate::hal::pwm_wg::PwmWg4Future;
 use super::bsp;
@@ -712,7 +577,7 @@ use bsp::hal::{
     dmac, dmac::ReadyFuture,
     pwm_wg::PwmWg4,
     pwm::{TC4Pinout, TC2Pinout},
-    gpio::{AnyPin, Output, Input, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
+    gpio::{Pin, AnyPin, Output, Input, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
     gpio::{E, PB08, PB09, PA16, PA17},
 };
 use crate::pac::Mclk;
@@ -720,19 +585,20 @@ use crate::pac::Mclk;
 pub(super) struct PinoutSpecificDataImplTc4 {}
 
 impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4 {
-    type PinTx = AnyPin<Id = PB09>;
-    type PinoutTx = TC4Pinout<Self::PinTx>;
+    type PinId = PB09;
+    type PinTx = Pin<Self::PinId, Output<PushPull>>;
+    type PinoutTx = TC4Pinout<Self::PinId>;
     type DmaChannel = dmac::Channel<dmac::Ch0, ReadyFuture>;
-    type PwmWg = PwmWg4Future<Self::PinTx, Self::DmaChannel>;
-    type PwmBase = PwmWg4<Self::PinTx>;
+    type PwmWg = PwmWg4Future<Self::PinId, Self::DmaChannel>;
+    type PwmBase = PwmWg4<Self::PinId>;
     type Timer = pac::Tc4;
 
     fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
         let pwm_tx_pin = pin.into_alternate::<E>();
-        Self::PwmWg::<Self::PinTx>::new_waveform_generator(
+        Self::PwmWg::new_waveform_generator(
             Hertz::from_raw(32),
             tc,
-            Self::PinoutTx::<Self::PinTx>::new_pin(pwm_tx_pin),
+            Self::PinoutTx::new_pin(pwm_tx_pin),
             mclk,
         ).with_dma_channel(dma)
     }
@@ -997,4 +863,154 @@ static RAW_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable
 
 unsafe fn raw_waker(waker_ptr: *const ()) -> Waker {
     Waker::from_raw(RawWaker::new(waker_ptr, &RAW_WAKER_VTABLE))
+}
+
+/// The idea here is to use simpler to implement TX driver using gpio timer to ease on
+/// implementation of the OpenTherm RX driver based on timer + DMA
+#[embassy_executor::task]
+async fn simulate_opentherm_tx(mut tx_pin: GpioPin<PA17, Output<PushPull>>,
+    receiver: Receiver<'static, ThreadModeRawMutex, SignalTxSimulation, 64>)
+{
+    let hw_dev = boiler_implementation::AtsamdGpioEdgeTriggerDev::new(tx_pin);
+    const DURATION_MS: u32 = 500;
+
+    // Give it some time before fire-up the
+    Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+    //  TODO: implement heapless queue receiving requests
+    let mut pass_dev_in_loop = hw_dev;
+    loop {
+        //  Comment this out to have on demand instead of periodic transfer:
+        let _received = receiver.receive().await;
+
+        //  hprintln!("channel::RX").ok();
+        //  tx_pin.toggle().unwrap();
+        //  Wait for the receiver to be ready, give it some time to setup the capture
+        Mono::delay(MillisDuration::<u32>::from_ticks(10).convert()).await;
+        //  The device implements the trigger interface, it shall implement send as well:
+        let (dev, result) =
+            pass_dev_in_loop.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
+        pass_dev_in_loop = dev;
+        //  Mono::delay(MillisDuration::<u32>::from_ticks(DURATION_MS).convert()).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn print_capture_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
+{
+    let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+    let count32 = tc4_readonly .count32();
+    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
+    //  let mut value_cc1 = 0x00u8;
+    loop {
+        //  Read this value:
+        //  let vcc1 = tc4_readonly.count8().cc(1).read().bits();
+        //  if vcc1 != value_cc1 {
+        //      hprintln!("tc4.cc1:0x{:08X}", vcc1).ok();
+        //      value_cc1 = vcc1;
+        //  }
+
+        //  uart_tx.write(b"Hello, world!").await.unwrap();
+        //  defmt::info!("Sent 10 bytes");
+
+        //  let mut delay = Delay::new(core.SYST, &mut clocks);
+        { //  Read counter one by one to see if it is running:
+            let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
+            let cnt_value = count32.count().read().bits();
+            let _ = count32.ctrlbset().write(|w| w.cmd().readsync());
+            let cn2_value = count32.count().read().bits();
+            //  hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+        }
+
+        hprintln!("tc4int:0x{:08X}", count32.intflag().read().bits()).ok();
+        //  hprintln!("tc4cc0:0x{:08X}", count32.cc(0).read().bits()).ok();
+        //hprintln!("tc4ctrla:0x{:08X}", count32.ctrla().read().bits()).ok();
+        //hprintln!("tc4evctrl:0x{:08X}", count32.evctrl().read().bits()).ok();
+        //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
+        //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+        // let btcnt = dmac_readonly.active().read().btcnt() ).ok();
+        //  hprintln!("dmaact:0x{:08X}", dmac_readonly.active().read().btcnt().bits() ).ok();
+        //hprintln!("dmactrl:0x{:08X}", dmac_readonly.ctrl().read().bits()).ok();
+        //hprintln!("dmabusy:0x{:08X}", dmac_readonly.busych().read().bits()).ok();
+        //hprintln!("dmachint:0x{:08X}", dmac_readonly.intstatus().read().bits()).ok();
+        //hprintln!("dmachintpend:0x{:08X}", dmac_readonly.intpend().read().bits()).ok();
+        //hprintln!("ch[0]chctrla:0x{:08X}", dmac_readonly.channel(0).chctrla().read().bits()).ok();
+        //hprintln!("ch[0]chint:0x{:08X}", dmac_readonly.channel(0).chintflag().read().bits()).ok();
+        //hprintln!("ch[0]chstat:0x{:08X}", dmac_readonly.channel(0).chstatus().read().bits()).ok();
+
+        //  let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
+        //  if check_and_clear_interrupts(flags_to_check).ovf() {
+        //      //  hprintln!("Overflow detected").ok();
+        //  }
+
+        //  delay.delay_ms(200u16);
+        Mono::delay(MillisDuration::<u32>::from_ticks(2000).convert()).await;
+    }
+}
+#[embassy_executor::task]
+async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp::UartPads>, Ch1>*/)
+{
+    let tc4_readonly = unsafe { crate::pac::Peripherals::steal().tc4 };
+    let dmac_readonly = unsafe { crate::pac::Peripherals::steal().dmac };
+    let mut value_cc1 = 0x00u8;
+    loop {
+        //  Read this value:
+        let vcc1 = tc4_readonly.count8().cc(1).read().bits();
+        if vcc1 != value_cc1 {
+            hprintln!("tc4.cc1:0x{:08X}", vcc1).ok();
+            value_cc1 = vcc1;
+        }
+
+        //  uart_tx.write(b"Hello, world!").await.unwrap();
+        //  defmt::info!("Sent 10 bytes");
+
+        //  let mut delay = Delay::new(core.SYST, &mut clocks);
+        let _ = tc4_readonly
+            .count8()
+            .ctrlbset()
+            .write(|w| w.cmd().readsync());
+        let cnt_value = tc4_readonly.count8().count().read().bits();
+        let _ = tc4_readonly
+            .count8()
+            .ctrlbset()
+            .write(|w| w.cmd().readsync());
+        let cn2_value = tc4_readonly.count8().count().read().bits();
+
+        hprintln!("cnt:0x{:08X}, 0x{:08X}", cnt_value, cn2_value).ok();
+        //  hprintln!(
+        //      "tc4int:0x{:08X}, cc1:0x{:08X}",
+        //      tc4_readonly.count8().intflag().read().bits(),
+        //      tc4_readonly.count8().cc(1).read().bits()
+        //  )
+        //  .ok();
+        //  hprintln!("tc4per:0x{:08X}", tc4_readonly.count8().per().read().bits()).ok();
+        //  hprintln!("dma:0x{:08X}", dmac_readonly.active().read().bits()).ok();
+
+        let flags_to_check = InterruptFlags::new().with_ovf(true).with_err(true);
+        if check_and_clear_interrupts(flags_to_check).ovf() {
+            //  hprintln!("Overflow detected").ok();
+        }
+
+        //  delay.delay_ms(200u16);
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn full_boiler_opentherm_simulation(mut tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>, 
+    timer: pac::Tc2, dma_channel: hal::dmac::Channel<hal::dmac::Ch1, ReadyFuture>, 
+    mclk: &'static mut Mclk,
+    timer_clocks: &'static Tc2Tc3Clock)
+{
+    // let mut edge_trigger_capture_dev =
+    //     boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
+    //         tx_pin,
+    //         rx_pin,
+    //         timer,
+    //         &mclk,
+    //         &timer_clocks,
+    //         dma_channel,
+    //     );
+    loop {
+        Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+    }
 }

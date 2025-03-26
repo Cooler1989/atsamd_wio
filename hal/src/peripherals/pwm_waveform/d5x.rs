@@ -37,6 +37,15 @@ unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
     }
 }
 
+pub use crate::pwm::PinoutCollapse;
+pub trait PwmWgFutureTrait {
+    type DmaChannel;
+    type TC;
+    type Pinout: PinoutCollapse;
+    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
+    fn start_regular_pwm(&mut self, ccx_value: u8);
+    async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(), DmacError>;
+}
 // Timer/Counter (TCx)
 //
 macro_rules! pwm_wg {
@@ -63,22 +72,14 @@ pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
 }
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
+}
 
-    pub fn start_regular_pwm(&mut self, ccx_value: u8) {
-        let count = self.base_pwm.tc.count8();
-        count.cc(0).write(|w| unsafe { w.bits(0x00u8) });
-        while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
-        while count.syncbusy().read().cc1().bit_is_set() {}
+impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TYPE Future>]<I, DmaCh> {
+    type DmaChannel = DmaCh;
+    type TC = crate::pac::$TC;
+    type Pinout = $pinout<I>;
 
-        count.ccbuf(0).write(|w| unsafe { w.bits(0x00u8) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
-
-        count.ctrla().modify(|_, w| w.enable().set_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
-    }
-
-    pub async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(),DmacError> {
+    async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(), DmacError> {
 
         let count = self.base_pwm.tc.count8();
 
@@ -109,8 +110,21 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
         value_to_return
     }
+    fn start_regular_pwm(&mut self, ccx_value: u8) {
+        let count = self.base_pwm.tc.count8();
+        count.cc(0).write(|w| unsafe { w.bits(0x00u8) });
+        while count.syncbusy().read().cc0().bit_is_set() {}
+        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
+        while count.syncbusy().read().cc1().bit_is_set() {}
 
-    pub fn decompose(self) -> (DmaCh, crate::pac::$TC, $pinout<I>)
+        count.ccbuf(0).write(|w| unsafe { w.bits(0x00u8) });
+        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
+
+        count.ctrla().modify(|_, w| w.enable().set_bit());
+        while count.syncbusy().read().enable().bit_is_set() {}
+    }
+
+    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout)
     {
         let $TYPE{clock_freq, requested_freq, tc, pinout} = self.base_pwm;
         (self._channel, tc, pinout)
@@ -252,7 +266,7 @@ impl<I: PinId> $TYPE<I> {
         while count.syncbusy().read().cc0().bit_is_set() {}
     }
 }
-}
+}  //  paste!()
 
 impl<I: PinId> $crate::ehal::pwm::ErrorType for$TYPE<I> {
     type Error = ::core::convert::Infallible;
