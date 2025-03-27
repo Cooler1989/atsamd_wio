@@ -35,7 +35,7 @@ use hal::{
     gpio::{Pin as GpioPin, PullUpInterrupt},
     pwm::{TC4Pinout, TC2Pinout},
     pwm_wg::PwmWg4,
-    timer_capture_waveform::{TimerCapture4, TimerCapture4Future},
+    timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait},
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 
@@ -105,6 +105,7 @@ mod boiler_implementation {
     use atsamd_hal::pac::tcc0::per;
     use atsamd_hal::pwm_wg::PwmWgFutureTrait;
     use atsamd_hal::pwm_wg::PinoutCollapse;
+    use atsamd_hal::timer_capture_waveform::TimerCaptureFutureTrait;
     use fugit::MicrosDuration;
     use core::any::Any;
     use core::marker::PhantomData;
@@ -117,23 +118,19 @@ mod boiler_implementation {
 
     const VEC_SIZE_CAPTURE: usize = 128;
 
-    trait PwmWgTrait {
-        type DmaChannel;
-        type Timer;
-        type PinoutTx: PinoutCollapse;
-        //  fn start_regular_pwm(&mut self, duty: u8);
-        //  fn start_timer_prepare_dma_transfer(&mut self, duty: u8, source: &mut [u8; VEC_SIZE_CAPTURE]) -> ReadyFuture;
-        fn decompose(self) -> (Self::DmaChannel, Self::Timer, Self::PinoutTx);
-    }
-
     pub(super) trait CreatePwmPinout {
-        type PinId: PinId;
+        type PinTxId: PinId;
+        type PinRxId: PinId;
         type PinTx: AnyPin;
-        type PinoutTx: PinoutCollapse;
+        type PinRx: AnyPin;
         type DmaChannel;
-        type PwmBase;
-        type PwmWg: PwmWgFutureTrait;
         type Timer;
+
+        type PinoutTx: PinoutCollapse;
+        type PinoutRx: PinoutCollapse<Pin = Self::PinRx>;
+        type PwmBase;
+        type PwmWg: PwmWgFutureTrait<DmaChannel = Self::DmaChannel, Pinout = Self::PinoutTx, TC = Self::Timer>;
+        type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
         fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &'a mut Mclk) -> Self::PwmWg;
         fn collapse(self) -> Self::PinTx;
     }
@@ -148,19 +145,21 @@ mod boiler_implementation {
         M: OtMode = NoneT,
         const N: usize = VEC_SIZE_CAPTURE,
     > {
-        tx_pin: Option<TxPin>,
-        rx_pin: Option<RxPin>,
+        tx_pin: Option<PinoutSpecificData::PinTx>,
+        rx_pin: Option<PinoutSpecificData::PinRx>,
 
         //  Pin<PB08, Output<PushPull>>`, found `TC4Pinout<PB09>``
         tx_init_duty_value: u8,
         pwm: Option<PinoutSpecificData::PwmWg>, // one alternative when TX operation
-        capture_device: Option<TimerCapture4Future<PB08, D>>, // one alternative when RX operation
+        capture_device: Option<PinoutSpecificData::TimerCaptureFuture>, // one alternative when RX operation
         dma: PhantomData<D>,
         mclk: &'a mut Mclk,
         periph_clock_freq: Hertz,
         timer_type: PhantomData<T>,
         mode: PhantomData<M>,
         pinout: PhantomData<PinoutSpecificData>,
+        unused_tx: PhantomData<TxPin>,
+        unused_rx: PhantomData<RxPin>,
     }
 
     impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>
@@ -221,11 +220,11 @@ mod boiler_implementation {
         //  Starting with TX as the boiler controller is more common and uses the TX command first
         pub fn new(
             pin_tx: PinoutSpecificData::PinTx,
-            pin_rx: GpioPin<PB08, PullUpInput>,
+            pin_rx: PinoutSpecificData::PinRx, /*GpioPin<PB08, PullUpInput>,*/
             tc_timer: PinoutSpecificData::Timer,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
-            dma_channel: D,
+            dma_channel: PinoutSpecificData::DmaChannel,
         ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into().into_alternate::<E>();
 
@@ -268,10 +267,10 @@ mod boiler_implementation {
             let pwm = self.pwm.unwrap();
             let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_tx = pinout.collapse();
-            let pin_tx = pin_tx.into_push_pull_output();
+            let pin_tx = pin_tx.into().into_push_pull_output();
 
             AtsamdEdgeTriggerCapture::<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>::new(
-                pin_tx.into(),
+                pin_tx,
                 self.rx_pin.unwrap(),
                 tc_timer,
                 self.mclk,
@@ -296,7 +295,7 @@ mod boiler_implementation {
                 self.capture_device.unwrap(),
             );
             let (dma, tc_timer, pinout_rx) = capture_timer.decompose();
-        //      let (dma, tc_timer, pinout) = pwm.decompose();
+            //  let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_rx = pinout_rx.collapse();
             let pin_rx = pin_rx.into_pull_up_input();
 
@@ -320,30 +319,31 @@ mod boiler_implementation {
         PinoutSpecificData: CreatePwmPinout,
     {
         pub fn new(
-            pin_tx: GpioPin<PB09, PushPullOutput>,
-            pin_rx: GpioPin<PB08, PullUpInput>,
-            tc_timer: T,
+            pin_tx: PinoutSpecificData::PinTx,
+            pin_rx: PinoutSpecificData::PinRx,
+            tc_timer: PinoutSpecificData::Timer,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
-            dma_channel: D,
+            dma_channel: PinoutSpecificData::DmaChannel,
         ) -> Self {
-            let pwm_rx_pin = pin_rx.into_alternate::<E>();
+            let pwm_rx_pin = pin_rx.into().into_alternate::<E>();
 
-            let timer_capture_4 = TimerCapture4::<PB08>::new_timer_capture(
+            let timer_capture = 
+                    PinoutSpecificData::TimerCaptureFuture::new_timer_capture(
                 periph_clock_freq,
                 Hertz::from_raw(32),
                 tc_timer,
-                TC4Pinout::<PB08>::new_pin(pwm_rx_pin),
+                PinoutSpecificData::PinoutRx::new_pin(pwm_rx_pin),
                 mclk,
             )
             .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
                                             // just for prototyping
             Self {
-                tx_pin: Some(pin_tx.into()),
+                tx_pin: Some(pin_tx),
                 rx_pin: None,
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: None,
-                capture_device: Some(timer_capture_4), //  TODO: Implement the capture device
+                capture_device: Some(timer_capture), //  TODO: Implement the capture device
                 dma: PhantomData,
                 mclk: mclk,
                 periph_clock_freq: periph_clock_freq,
@@ -574,10 +574,11 @@ use super::bsp;
 use bsp::pac;
 use bsp::hal::{
     time::Hertz,
+    timer_capture_waveform::TimerCapture4Future,
     dmac, dmac::ReadyFuture,
     pwm_wg::PwmWg4,
     pwm::{TC4Pinout, TC2Pinout},
-    gpio::{Pin, AnyPin, Output, Input, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
+    gpio::{Pin, AnyPin, Output, Input, Alternate, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
     gpio::{E, PB08, PB09, PA16, PA17},
 };
 use crate::pac::Mclk;
@@ -585,12 +586,16 @@ use crate::pac::Mclk;
 pub(super) struct PinoutSpecificDataImplTc4 {}
 
 impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4 {
-    type PinId = PB09;
-    type PinTx = Pin<Self::PinId, Output<PushPull>>;
-    type PinoutTx = TC4Pinout<Self::PinId>;
+    type PinTxId = PB09;
+    type PinRxId = PB08;
+    type PinTx = Pin<Self::PinTxId, Output<PushPull>>;
+    type PinRx = Pin<Self::PinRxId, Alternate<E>>;
+    type PinoutTx = TC4Pinout<Self::PinTxId>;
+    type PinoutRx = TC4Pinout<Self::PinRxId>;
     type DmaChannel = dmac::Channel<dmac::Ch0, ReadyFuture>;
-    type PwmWg = PwmWg4Future<Self::PinId, Self::DmaChannel>;
-    type PwmBase = PwmWg4<Self::PinId>;
+    type PwmWg = PwmWg4Future<Self::PinTxId, Self::DmaChannel>;
+    type TimerCaptureFuture = TimerCapture4Future<Self::PinRxId, Self::DmaChannel>;
+    type PwmBase = PwmWg4<Self::PinTxId>;
     type Timer = pac::Tc4;
 
     fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
@@ -996,7 +1001,7 @@ async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp:
 }
 
 #[embassy_executor::task]
-async fn full_boiler_opentherm_simulation(mut tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>, 
+async fn full_boiler_opentherm_simulation(tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>, 
     timer: pac::Tc2, dma_channel: hal::dmac::Channel<hal::dmac::Ch1, ReadyFuture>, 
     mclk: &'static mut Mclk,
     timer_clocks: &'static Tc2Tc3Clock)

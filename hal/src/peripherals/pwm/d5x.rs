@@ -12,8 +12,9 @@ use crate::timer_params::TimerParams;
 // Timer/Counter (TCx)
 
 pub trait PinoutCollapse {
-    type Pin;
+    type Pin: AnyPin;
     fn collapse(self) -> Self::Pin;
+    //  fn new_pin(pin: impl AnyPin) -> Self;
 }
 /// This is a major syntax hack.
 ///
