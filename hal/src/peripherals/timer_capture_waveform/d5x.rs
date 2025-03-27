@@ -220,6 +220,18 @@ impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHan
     }
 }
 
+pub use crate::pwm::PinoutCollapse;
+
+pub trait TimerCaptureFutureTrait {
+    type DmaChannel;
+    type TC;
+    type Pinout: PinoutCollapse;
+    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
+    //  fn start_regular_pwm(&mut self, ccx_value: u8);
+    async fn start_timer_prepare_dma_transfer(&mut self, capture_memory: &mut [u32]) 
+        -> Result<CounterValueAtTermination,DmacError>;
+}
+
 macro_rules! create_timer_capture {
     ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident, $event:ident)),+) => {
         $(
@@ -302,8 +314,17 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
         while count.syncbusy().read().enable().bit_is_set() {}
     }
 
+}
+impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait for [<$TYPE Future>]<I, DmaCh> {
+    type DmaChannel = DmaCh;
+    type TC = crate::pac::$TC;
+    type Pinout = $pinout<I>;
+    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout){
+        let $TYPE{clock_freq, tc, pinout} = self.base_pwm;
+        (self._channel, tc, pinout)
+    }
     /// The capture_memorys first element will be the value of the counter at the moment of the first event. The timer starts counting from zero, which mean the first period can be assumed as the value of the first element in the memory.
-    pub async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) -> Result<CounterValueAtTermination,DmacError> {
+    async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) -> Result<CounterValueAtTermination,DmacError> {
 
         let count = self.base_pwm.tc.count32();
 
@@ -337,11 +358,6 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 
     }
 
-    pub fn decompose(self) -> (DmaCh, crate::pac::$TC, $pinout<I>)
-    {
-        let $TYPE{clock_freq, tc, pinout} = self.base_pwm;
-        (self._channel, tc, pinout)
-    }
 }
 
 }  //  paste macrto
