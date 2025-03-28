@@ -33,7 +33,7 @@ use hal::{
     ehal::digital::{OutputPin, StatefulOutputPin},
     eic::{Eic, Sense},
     gpio::{Pin as GpioPin, PullUp, PullUpInterrupt},
-    pwm::{TC4Pinout, TC2Pinout},
+    pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
     pwm_wg::PwmWg4,
     timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait},
 };
@@ -100,6 +100,7 @@ async fn boiler_task() {}
 mod boiler_implementation {
     use crate::dmac::ReadyFuture;
     use crate::hal::pwm_wg::{PwmWg4Future};
+    use atsamd_hal::gpio::G;
     use atsamd_hal::gpio::{Alternate, PullUpInput, pin::AnyPin};
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
@@ -125,9 +126,8 @@ mod boiler_implementation {
         type PinRx: AnyPin;
         type DmaChannel;
         type Timer;
-
-        type PinoutTx: PinoutCollapse<PinId = Self::PinTxId>;
-        type PinoutRx: PinoutCollapse<PinId = Self::PinRxId>;
+        type PinoutTx: PinoutCollapse<PinId = Self::PinTxId> + PinoutNewTrait<Self::PinTxId>;
+        type PinoutRx: PinoutCollapse<PinId = Self::PinRxId> + PinoutNewTrait<Self::PinRxId>;
         type PwmBase;
         type PwmWg: PwmWgFutureTrait<DmaChannel = Self::DmaChannel, Pinout = Self::PinoutTx, TC = Self::Timer>;
         type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
@@ -581,7 +581,7 @@ use bsp::hal::{
     timer_capture_waveform::TimerCapture4Future,
     dmac, dmac::ReadyFuture,
     pwm_wg::PwmWg4,
-    pwm::{TC4Pinout, TC2Pinout},
+    pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
     gpio::{Pin, AnyPin, Output, Input, Alternate, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
     gpio::{E, PB08, PB09, PA16, PA17},
 };
