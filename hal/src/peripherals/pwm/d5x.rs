@@ -12,8 +12,10 @@ use crate::timer_params::TimerParams;
 // Timer/Counter (TCx)
 
 pub trait PinoutCollapse {
-    type Pin: AnyPin;
-    fn collapse(self) -> Self::Pin;
+    type PinId : PinId;
+    //  type Pin = Pin<I, AlternateE>;
+
+    fn collapse(self) -> Pin<Self::PinId, AlternateE>;
     //  fn new_pin(pin: impl AnyPin) -> Self;
 }
 /// This is a major syntax hack.
@@ -45,7 +47,7 @@ macro_rules! impl_tc_pinout {
             _pin: Pin<I, AlternateE>,
         }
         impl<I: PinId> PinoutCollapse for $Type<I> {
-            type Pin = Pin<I, AlternateE>;
+            type PinId = I;
             fn collapse(self) -> Pin<I, AlternateE> {
                 self._pin
             } 

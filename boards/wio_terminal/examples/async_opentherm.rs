@@ -32,7 +32,7 @@ use hal::{
     dmac::{DmaController, PriorityLevel, Ch1, ReadyFuture},
     ehal::digital::{OutputPin, StatefulOutputPin},
     eic::{Eic, Sense},
-    gpio::{Pin as GpioPin, PullUpInterrupt},
+    gpio::{Pin as GpioPin, PullUp, PullUpInterrupt},
     pwm::{TC4Pinout, TC2Pinout},
     pwm_wg::PwmWg4,
     timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait},
@@ -126,8 +126,8 @@ mod boiler_implementation {
         type DmaChannel;
         type Timer;
 
-        type PinoutTx: PinoutCollapse;
-        type PinoutRx: PinoutCollapse<Pin = Self::PinRx>;
+        type PinoutTx: PinoutCollapse<PinId = Self::PinTxId>;
+        type PinoutRx: PinoutCollapse<PinId = Self::PinRxId>;
         type PwmBase;
         type PwmWg: PwmWgFutureTrait<DmaChannel = Self::DmaChannel, Pinout = Self::PinoutTx, TC = Self::Timer>;
         type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
@@ -145,8 +145,8 @@ mod boiler_implementation {
         M: OtMode = NoneT,
         const N: usize = VEC_SIZE_CAPTURE,
     > {
-        tx_pin: Option<PinoutSpecificData::PinTx>,
-        rx_pin: Option<PinoutSpecificData::PinRx>,
+        tx_pin: Option<GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>>,
+        rx_pin: Option<GpioPin<PinoutSpecificData::PinRxId, Output<PushPull>>>,
 
         //  Pin<PB08, Output<PushPull>>`, found `TC4Pinout<PB09>``
         tx_init_duty_value: u8,
@@ -219,14 +219,14 @@ mod boiler_implementation {
     {
         //  Starting with TX as the boiler controller is more common and uses the TX command first
         pub fn new(
-            pin_tx: PinoutSpecificData::PinTx,
-            pin_rx: PinoutSpecificData::PinRx, /*GpioPin<PB08, PullUpInput>,*/
+            pin_tx: GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>,
+            pin_rx: GpioPin<PinoutSpecificData::PinRxId, Input<PullUp>>,
             tc_timer: PinoutSpecificData::Timer,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
             dma_channel: PinoutSpecificData::DmaChannel,
         ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
-            let pwm_tx_pin = pin_tx.into().into_alternate::<E>();
+            let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
             todo!();
             //  let pwm = PinoutSpecificData::new_pin(pwm_tx_pin, tc_timer, mclk).with_dma_channel(dma_channel);
@@ -267,7 +267,7 @@ mod boiler_implementation {
             let pwm = self.pwm.unwrap();
             let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_tx = pinout.collapse();
-            let pin_tx = pin_tx.into().into_push_pull_output();
+            let pin_tx = pin_tx.into_push_pull_output();
 
             AtsamdEdgeTriggerCapture::<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>::new(
                 pin_tx,
@@ -319,36 +319,40 @@ mod boiler_implementation {
         PinoutSpecificData: CreatePwmPinout,
     {
         pub fn new(
-            pin_tx: PinoutSpecificData::PinTx,
-            pin_rx: PinoutSpecificData::PinRx,
+            pin_tx: GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>,
+            pin_rx: GpioPin<PinoutSpecificData::PinRxId, Output<PushPull>>,
             tc_timer: PinoutSpecificData::Timer,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
             dma_channel: PinoutSpecificData::DmaChannel,
         ) -> Self {
-            let pwm_rx_pin = pin_rx.into().into_alternate::<E>();
+            let pwm_rx_pin = pin_rx.into_alternate::<E>();
 
-            let timer_capture = 
-                    PinoutSpecificData::TimerCaptureFuture::new_timer_capture(
-                periph_clock_freq,
-                Hertz::from_raw(32),
-                tc_timer,
-                PinoutSpecificData::PinoutRx::new_pin(pwm_rx_pin),
-                mclk,
-            )
-            .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
-                                            // just for prototyping
-            Self {
-                tx_pin: Some(pin_tx),
-                rx_pin: None,
-                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-                pwm: None,
-                capture_device: Some(timer_capture), //  TODO: Implement the capture device
-                dma: PhantomData,
-                mclk: mclk,
-                periph_clock_freq: periph_clock_freq,
-                mode: PhantomData,
-            }
+            let pinout = PinoutSpecificData::PinoutRx::new_pin(pwm_rx_pin);
+
+            todo!();
+
+            //  let timer_capture = 
+            //          PinoutSpecificData::TimerCaptureFuture::new_timer_capture(
+            //      periph_clock_freq,
+            //      Hertz::from_raw(32),
+            //      tc_timer,
+            //      pinout,
+            //      mclk,
+            //  )
+            //  .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
+            //                                  // just for prototyping
+            //  Self {
+            //      tx_pin: Some(pin_tx),
+            //      rx_pin: None,
+            //      tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+            //      pwm: None,
+            //      capture_device: Some(timer_capture), //  TODO: Implement the capture device
+            //      dma: PhantomData,
+            //      mclk: mclk,
+            //      periph_clock_freq: periph_clock_freq,
+            //      mode: PhantomData,
+            //  }
         }
     }
 
