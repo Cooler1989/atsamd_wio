@@ -100,12 +100,12 @@ async fn boiler_task() {}
 mod boiler_implementation {
     use crate::dmac::ReadyFuture;
     use crate::hal::pwm_wg::{PwmWg4Future};
+    use crate::timer4_data_set::PinoutSpecificDataImplTc4;
     use atsamd_hal::gpio::G;
     use atsamd_hal::gpio::{Alternate, PullUpInput, pin::AnyPin};
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
-    use atsamd_hal::pwm_wg::PwmWgFutureTrait;
-    use atsamd_hal::pwm_wg::PinoutCollapse;
+    use atsamd_hal::pwm_wg::{PwmWgFutureTrait, PwmBaseTrait, PinoutCollapse};
     use atsamd_hal::timer_capture_waveform::TimerCaptureFutureTrait;
     use fugit::MicrosDuration;
     use core::any::Any;
@@ -128,7 +128,7 @@ mod boiler_implementation {
         type Timer;
         type PinoutTx: PinoutCollapse<PinId = Self::PinTxId> + PinoutNewTrait<Self::PinTxId>;
         type PinoutRx: PinoutCollapse<PinId = Self::PinRxId> + PinoutNewTrait<Self::PinRxId>;
-        type PwmBase;
+        type PwmBase: PwmBaseTrait<TC = Self::Timer, Pinout = Self::PinoutTx>;
         type PwmWg: PwmWgFutureTrait<DmaChannel = Self::DmaChannel, Pinout = Self::PinoutTx, TC = Self::Timer>;
         type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
         fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &'a mut Mclk) -> Self::PwmWg;
@@ -170,20 +170,27 @@ mod boiler_implementation {
         PinoutSpecificData: CreatePwmPinout,
     {
         pub fn new_with_default(
-            pin_tx: TxPin,
-            pin_rx: RxPin,
+            pin_tx: GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>,
+            pin_rx: GpioPin<PinoutSpecificData::PinRxId, Input<PullUp>>,
             tc_timer: PinoutSpecificData::Timer /*pac::Tc4*/,
             mclk: &'a mut Mclk,
             input_clock_frequency: Hertz,
             pinout_factory: PinoutSpecificData,
             dma_channel: PinoutSpecificData::DmaChannel,
         ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
-            let pwm_tx_pin = pin_tx.into().into_alternate::<E>();
+            let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
-            todo!();
             //  let pwm = PinoutSpecificData::new_pwm_generator(
             //      pwm_tx_pin, tc_timer, dma_channel, mclk);
+            let pwm_generator = PinoutSpecificData::PwmBase::new_waveform_generator(
+                Hertz::from_raw(32),
+                Hertz::from_raw(32),
+                tc_timer,
+                PinoutSpecificData::PinoutTx::new_pin(pwm_tx_pin),
+                mclk,
+            )/*.with_dma_channel(dma_channel)*/;
 
+            todo!();
             //  Move this to the factory:
             //   let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
             //       input_clock_frequency,
@@ -580,7 +587,7 @@ use bsp::hal::{
     time::Hertz,
     timer_capture_waveform::TimerCapture4Future,
     dmac, dmac::ReadyFuture,
-    pwm_wg::PwmWg4,
+    pwm_wg::{PwmWg4, PwmBaseTrait},
     pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
     gpio::{Pin, AnyPin, Output, Input, Alternate, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
     gpio::{E, PB08, PB09, PA16, PA17},
@@ -604,7 +611,8 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4
 
     fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
         let pwm_tx_pin = pin.into_alternate::<E>();
-        Self::PwmWg::new_waveform_generator(
+        Self::PwmBase::new_waveform_generator(
+            Hertz::from_raw(32),
             Hertz::from_raw(32),
             tc,
             Self::PinoutTx::new_pin(pwm_tx_pin),
