@@ -18,6 +18,9 @@ pub trait PinoutCollapse {
     fn collapse(self) -> Pin<Self::PinId, AlternateE>;
     //  fn new_pin(pin: impl AnyPin) -> Self;
 }
+pub trait PinoutNewTrait<T: PinId> {
+    fn new_pin(pin: Pin<T, Alternate<E>>) -> Self;
+}
 /// This is a major syntax hack.
 ///
 /// The previous Pinout types were enums that took specific v1::Pin types. As a
@@ -54,14 +57,25 @@ macro_rules! impl_tc_pinout {
         }
 
         $(
+            //  $( #[$attr] )?
+            //  impl $Type<$Id> {  // those are specializations similar to C++ template specializations 
+            //      #[inline]
+            //      pub fn new_pin(pin: impl AnyPin<Id = $Id>) -> Self {
+            //          let _pin = pin.into().into_alternate();
+            //          Self { _pin }
+            //      }
+            //  }
+
+
             $( #[$attr] )?
-            impl $Type<$Id> {  // those are specializations similar to C++ template specializations 
+            impl PinoutNewTrait<$Id> for $Type<$Id> {  // those are specializations similar to C++ template specializations 
                 #[inline]
-                pub fn new_pin(pin: impl AnyPin<Id = $Id>) -> Self {
-                    let _pin = pin.into().into_alternate();
-                    Self { _pin }
+                fn new_pin(pin: Pin<$Id, Alternate<E>>) -> Self {
+                    Self { _pin: pin }
                 }
             }
+
+
             //  Where should this be implemented? TODO:
             //  $( #[$attr] )?
             //  impl PinoutCollapse for $Type<$Id> {  // those are specializations similar to C++ template specializations 
