@@ -46,6 +46,17 @@ pub trait PwmWgFutureTrait {
     fn start_regular_pwm(&mut self, ccx_value: u8);
     async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(), DmacError>;
 }
+pub trait PwmBaseTrait {
+    type TC;
+    type Pinout: PinoutCollapse;
+    fn new_waveform_generator(
+        clock_freq: Hertz,
+        freq: Hertz,
+        tc: Self::TC,
+        pinout: Self::Pinout,
+        mclk: &mut Mclk,
+    ) -> Self;
+}
 // Timer/Counter (TCx)
 //
 macro_rules! pwm_wg {
@@ -145,12 +156,14 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TY
 /// principle is that the timer CCx register will be loaded with either 0x00
 /// of 0xFF to produce either full cycle high or low signal.
 */
-impl<I: PinId> $TYPE<I> {
-    pub fn new_waveform_generator(
+impl<I: PinId> PwmBaseTrait for $TYPE<I> {
+    type TC = crate::pac::$TC;
+    type Pinout = $pinout<I>;
+    fn new_waveform_generator(
         clock_freq: Hertz,
         freq: Hertz,
-        tc: crate::pac::$TC,
-        pinout: $pinout<I>,
+        tc: Self::TC,
+        pinout: Self::Pinout,
         mclk: &mut Mclk,
     ) -> Self {
         const TIEMR_PERIOD: u8 = 233;  //  mclk / 256 / 233 = 1000 Hz
@@ -206,6 +219,8 @@ impl<I: PinId> $TYPE<I> {
             pinout,
         }
     }
+}
+impl<I: PinId> $TYPE<I> {
 
     //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
     pub fn with_dma_channel<CH>(self, channel: CH ) -> [<$TYPE Future>]<I, CH>
