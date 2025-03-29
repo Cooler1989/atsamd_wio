@@ -139,8 +139,6 @@ mod boiler_implementation {
         'a,
         D: dmac::AnyChannel<Status = ReadyFuture>,
         T,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
         M: OtMode = NoneT,
         const N: usize = VEC_SIZE_CAPTURE,
@@ -158,15 +156,11 @@ mod boiler_implementation {
         timer_type: PhantomData<T>,
         mode: PhantomData<M>,
         pinout: PhantomData<PinoutSpecificData>,
-        unused_tx: PhantomData<TxPin>,
-        unused_rx: PhantomData<RxPin>,
-    }
+        }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>
+    impl<'a, D, T, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
         pub fn new_with_default(
@@ -177,7 +171,7 @@ mod boiler_implementation {
             input_clock_frequency: Hertz,
             pinout_factory: PinoutSpecificData,
             dma_channel: PinoutSpecificData::DmaChannel,
-        ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
+        ) -> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
             //  let pwm = PinoutSpecificData::new_pwm_generator(
@@ -217,11 +211,9 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>
+    impl<'a, D, T, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
         //  Starting with TX as the boiler controller is more common and uses the TX command first
@@ -232,7 +224,7 @@ mod boiler_implementation {
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
             dma_channel: PinoutSpecificData::DmaChannel,
-        ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
+        ) -> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
             todo!();
@@ -261,22 +253,20 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> EdgeTriggerTransitiveToCaptureCapable<N>
-        for AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>
+    impl<'a, D, T, PinoutSpecificData, const N: usize> EdgeTriggerTransitiveToCaptureCapable<N>
+        for AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
-        type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>;
+        type CaptureDevice = AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtRx, N>;
         fn transition_to_capture_capable_device(self) -> Self::CaptureDevice {
             let pwm = self.pwm.unwrap();
             let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_tx = pinout.collapse();
             let pin_tx = pin_tx.into_push_pull_output();
 
-            AtsamdEdgeTriggerCapture::<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>::new(
+            AtsamdEdgeTriggerCapture::<'a, D, T, PinoutSpecificData, OtRx, N>::new(
                 pin_tx,
                 self.rx_pin.unwrap(),
                 tc_timer,
@@ -287,16 +277,14 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> EdgeCaptureTransitiveToTriggerCapable<N>
-        for AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>
+    impl<'a, D, T, PinoutSpecificData, const N: usize> EdgeCaptureTransitiveToTriggerCapable<N>
+        for AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
-        type TriggerDevice = AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>;
-        fn transition_to_trigger_capable_device(self) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
+        type TriggerDevice = AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N>;
+        fn transition_to_trigger_capable_device(self) -> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N> {
             let (pin_tx, capture_timer) = (
                 self.tx_pin.unwrap(),
                 self.capture_device.unwrap(),
@@ -306,7 +294,7 @@ mod boiler_implementation {
             let pin_rx = pinout_rx.collapse();
             let pin_rx = pin_rx.into_pull_up_input();
 
-            AtsamdEdgeTriggerCapture::<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>::new(
+            AtsamdEdgeTriggerCapture::<'a, D, T, PinoutSpecificData, OtTx, N>::new(
                 pin_tx,
                 pin_rx,
                 tc_timer,
@@ -317,12 +305,10 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> 
-            AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>
+    impl<'a, D, T, PinoutSpecificData, const N: usize> 
+            AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
         pub fn new(
@@ -363,13 +349,11 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> EdgeTriggerInterface 
+    impl<'a, D, T, PinoutSpecificData, const N: usize> EdgeTriggerInterface 
     for 
-        AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>
+        AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
         async fn trigger(
@@ -406,11 +390,9 @@ mod boiler_implementation {
         }
     }
 
-    impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtRx, N>
+    impl<'a, D, T, PinoutSpecificData, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtRx, N>
     where
         D: dmac::AnyChannel<Status = ReadyFuture>,
-        TxPin: AnyPin,
-        RxPin: AnyPin,
         PinoutSpecificData: CreatePwmPinout,
     {
         async fn start_capture(
@@ -708,17 +690,15 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     #[cfg(feature = "use_opentherm")]
     let mut edge_trigger_capture_dev =
-    //  impl<'a, D, T, TxPin, RxPin, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N>
+    //  impl<'a, D, T, PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N>
         //  pub fn new_with_default(
-        //      pin_tx: TxPin,
-        //      pin_rx: RxPin,
         //      tc_timer: T /*pac::Tc4*/,
         //      mclk: &'a mut Mclk,
         //      input_clock_frequency: Hertz,
         //      pinout_factory: PinoutSpecificData,
         //      dma_channel: D,
-        //  ) -> AtsamdEdgeTriggerCapture<'a, D, T, TxPin, RxPin, PinoutSpecificData, OtTx, N> {
-        boiler_implementation::AtsamdEdgeTriggerCapture::<_, pac::Tc4, _, _,timer4_data_set::PinoutSpecificDataImplTc4, _>::new_with_default(
+        //  ) -> AtsamdEdgeTriggerCapture<'a, D, T, PinoutSpecificData, OtTx, N> {
+        boiler_implementation::AtsamdEdgeTriggerCapture::<_, pac::Tc4, timer4_data_set::PinoutSpecificDataImplTc4, _>::new_with_default(
             pwm_tx_pin,
             pwm_rx_pin,
             tc4_timer,
