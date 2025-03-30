@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
 
-use atsamd_hal::pac::rtc::mode0::count;
+//  use atsamd_hal::pac::rtc::mode0::count;
 use bsp::hal::time::Hertz;
-use core::marker::PhantomData;
+//  use core::marker::PhantomData;
 use core::time::Duration;
 use defmt_rtt as _;
 use hal::fugit::Hertz as FugitHertz;
@@ -23,7 +23,7 @@ use bsp::{
     hal::gpio::{E, PB08, PB09, PA16, PA17},
     pin_alias,
 };
-use wio_terminal::prelude::_embedded_hal_PwmPin;
+//  use wio_terminal::prelude::_embedded_hal_PwmPin;
 
 use hal::{
     clock::{ClockGenId, ClockSource, GenericClockController, Tc4Tc5Clock, Tc2Tc3Clock},
@@ -124,14 +124,14 @@ mod boiler_implementation {
         type PinRxId: PinId;
         type PinTx: AnyPin;
         type PinRx: AnyPin;
-        type DmaChannel;
+        type DmaChannel: dmac::AnyChannel<Status = ReadyFuture>;
         type Timer;
         type PinoutTx: PinoutCollapse<PinId = Self::PinTxId> + PinoutNewTrait<Self::PinTxId>;
         type PinoutRx: PinoutCollapse<PinId = Self::PinRxId> + PinoutNewTrait<Self::PinRxId>;
-        type PwmBase: PwmBaseTrait<TC = Self::Timer, Pinout = Self::PinoutTx>;
+        type PwmBase: PwmBaseTrait<TC = Self::Timer, Pinout = Self::PinoutTx, ConvertibleToFuture<Self::DmaChannel> = Self::PwmWg>;
         type PwmWg: PwmWgFutureTrait<DmaChannel = Self::DmaChannel, Pinout = Self::PinoutTx, TC = Self::Timer>;
         type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
-        fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &'a mut Mclk) -> Self::PwmWg;
+        //  fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &'a mut Mclk) -> Self::PwmWg;
         fn collapse(self) -> Self::PinTx;
     }
 
@@ -142,7 +142,7 @@ mod boiler_implementation {
         const N: usize = VEC_SIZE_CAPTURE,
     > {
         tx_pin: Option<GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>>,
-        rx_pin: Option<GpioPin<PinoutSpecificData::PinRxId, Output<PushPull>>>,
+        rx_pin: Option<GpioPin<PinoutSpecificData::PinRxId, Input<PullUp>>>,
 
         //  Pin<PB08, Output<PushPull>>`, found `TC4Pinout<PB09>``
         tx_init_duty_value: u8,
@@ -170,40 +170,25 @@ mod boiler_implementation {
         ) -> AtsamdEdgeTriggerCapture<'a, PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
-            //  let pwm = PinoutSpecificData::new_pwm_generator(
-            //      pwm_tx_pin, tc_timer, dma_channel, mclk);
-            let pwm_generator = PinoutSpecificData::PwmBase::new_waveform_generator(
+            let pwm_generator_future = PinoutSpecificData::PwmBase::new_waveform_generator(
                 Hertz::from_raw(32),
                 Hertz::from_raw(32),
                 tc_timer,
                 PinoutSpecificData::PinoutTx::new_pin(pwm_tx_pin),
                 mclk,
-            )/*.with_dma_channel(dma_channel)*/;
+            ).with_dma_channel(dma_channel);
 
-            todo!();
-            //  Move this to the factory:
-            //   let pwm4 = PwmWg4::<PB09>::new_waveform_generator(
-            //       input_clock_frequency,
-            //       Hertz::from_raw(32),
-            //       tc_timer,
-            //       TC4Pinout::<PB09>::new_pin(pwm_tx_pin.into()),
-            //       mclk,
-            //   )
-            //   .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
-                                            // just for prototyping
-            //  Self {
-            //      tx_pin: None,
-            //      rx_pin: Some(pin_rx),
-            //      tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-            //      pwm: Some(pwm),
-            //      capture_device: None,
-            //      dma: PhantomData,
-            //      mclk: mclk,
-            //      periph_clock_freq: input_clock_frequency,
-            //      timer_type: PhantomData,
-            //      mode: PhantomData,
-            //      pinout: PhantomData,
-            //  }
+            Self {
+                tx_pin: None,
+                rx_pin: Some(pin_rx),
+                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+                pwm: Some(pwm_generator_future),
+                capture_device: None,
+                mclk: mclk,
+                periph_clock_freq: input_clock_frequency,
+                mode: PhantomData,
+                pinout: PhantomData,
+            }
         }
     }
 
@@ -305,7 +290,7 @@ mod boiler_implementation {
     {
         pub fn new(
             pin_tx: GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>,
-            pin_rx: GpioPin<PinoutSpecificData::PinRxId, Output<PushPull>>,
+            pin_rx: GpioPin<PinoutSpecificData::PinRxId, Input<PullUp>>,
             tc_timer: PinoutSpecificData::Timer,
             mclk: &'a mut Mclk,
             periph_clock_freq: Hertz,
@@ -352,6 +337,7 @@ mod boiler_implementation {
             iterator: impl Iterator<Item = bool>,
             period: core::time::Duration,
         ) -> (Self, Result<(), TriggerError>) {
+
             //  TODO: Implement the period arg usage
             let response = match self.pwm.as_mut() {
                 Some(pwm) => {
@@ -364,16 +350,15 @@ mod boiler_implementation {
                         let level = if value { 0xffu8 } else { 0x00u8 };
                         source[idx] = level;
                     }
-                    todo!();
                     //  return:
                     //  TODO: Actually use the period to set the PWM frequency
-                    //  pwm.start_regular_pwm(self.tx_init_duty_value);
-                    //  let dma_future = self
-                    //      .pwm
-                    //      .as_mut()
-                    //      .unwrap() /* TODO: remove runtime panic */
-                    //      .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
-                    //  dma_future.await.map_err(|_| TriggerError::GenericError)
+                    pwm.start_regular_pwm(self.tx_init_duty_value);
+                    let dma_future = self
+                        .pwm
+                        .as_mut()
+                        .unwrap() /* TODO: remove runtime panic */
+                        .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
+                    dma_future.await.map_err(|_| TriggerError::GenericError)
                 }
                 None => Err(TriggerError::GenericError),
             };
@@ -576,16 +561,16 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4
     type PwmBase = PwmWg4<Self::PinTxId>;
     type Timer = pac::Tc4;
 
-    fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
-        let pwm_tx_pin = pin.into_alternate::<E>();
-        Self::PwmBase::new_waveform_generator(
-            Hertz::from_raw(32),
-            Hertz::from_raw(32),
-            tc,
-            Self::PinoutTx::new_pin(pwm_tx_pin),
-            mclk,
-        ).with_dma_channel(dma)
-    }
+    //  fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
+    //      let pwm_tx_pin = pin.into_alternate::<E>();
+    //      Self::PwmBase::new_waveform_generator(
+    //          Hertz::from_raw(32),
+    //          Hertz::from_raw(32),
+    //          tc,
+    //          Self::PinoutTx::new_pin(pwm_tx_pin),
+    //          mclk,
+    //      ).with_dma_channel(dma)
+    //  }
     fn collapse(self) -> Self::PinTx {
         todo!()
     }
