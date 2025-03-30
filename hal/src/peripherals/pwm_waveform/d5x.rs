@@ -39,9 +39,10 @@ unsafe impl<T: Beat> Buffer for PwmWaveformGeneratorPtr<T> {
 
 pub use crate::pwm::PinoutCollapse;
 pub trait PwmWgFutureTrait {
-    type DmaChannel;
+    type DmaChannel: AnyChannel<Status=ReadyFuture>;
     type TC;
     type Pinout: PinoutCollapse;
+
     fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
     fn start_regular_pwm(&mut self, ccx_value: u8);
     async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(), DmacError>;
@@ -49,6 +50,13 @@ pub trait PwmWgFutureTrait {
 pub trait PwmBaseTrait {
     type TC;
     type Pinout: PinoutCollapse;
+    type ConvertibleToFuture<D>: PwmWgFutureTrait<TC = Self::TC, Pinout = Self::Pinout, DmaChannel = D>
+    where
+        D: AnyChannel<Status=ReadyFuture>;
+
+    //  type Future: PwmWgFutureTrait<TC = Self::TC, Pinout = Self::Pinout, DmaChannel = Self::DmaChannel>;
+
+    /// Create a new PWM Waveform Generator
     fn new_waveform_generator(
         clock_freq: Hertz,
         freq: Hertz,
@@ -56,6 +64,9 @@ pub trait PwmBaseTrait {
         pinout: Self::Pinout,
         mclk: &mut Mclk,
     ) -> Self;
+    fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
+    where
+        CH: AnyChannel<Status=ReadyFuture>;
 }
 // Timer/Counter (TCx)
 //
@@ -159,6 +170,9 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TY
 impl<I: PinId> PwmBaseTrait for $TYPE<I> {
     type TC = crate::pac::$TC;
     type Pinout = $pinout<I>;
+    type ConvertibleToFuture<D> = [<$TYPE Future>]<I, D> where
+        D: AnyChannel<Status=ReadyFuture>;
+
     fn new_waveform_generator(
         clock_freq: Hertz,
         freq: Hertz,
@@ -219,12 +233,10 @@ impl<I: PinId> PwmBaseTrait for $TYPE<I> {
             pinout,
         }
     }
-}
-impl<I: PinId> $TYPE<I> {
 
     //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
-    pub fn with_dma_channel<CH>(self, channel: CH ) -> [<$TYPE Future>]<I, CH>
-        where
+    fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
+    where
         CH: AnyChannel<Status=ReadyFuture>
     {
         [<$TYPE Future>] {
@@ -232,6 +244,9 @@ impl<I: PinId> $TYPE<I> {
             _channel: channel,
         }
     }
+}
+
+impl<I: PinId> $TYPE<I> {
 
     pub fn start(&mut self) {
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
