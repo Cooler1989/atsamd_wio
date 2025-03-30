@@ -35,7 +35,7 @@ use hal::{
     gpio::{Pin as GpioPin, PullUp, PullUpInterrupt},
     pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
     pwm_wg::PwmWg4,
-    timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait},
+    timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait, TimerCaptureBaseTrait},
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 
@@ -130,6 +130,7 @@ mod boiler_implementation {
         type PinoutRx: PinoutCollapse<PinId = Self::PinRxId> + PinoutNewTrait<Self::PinRxId>;
         type PwmBase: PwmBaseTrait<TC = Self::Timer, Pinout = Self::PinoutTx, ConvertibleToFuture<Self::DmaChannel> = Self::PwmWg>;
         type PwmWg: PwmWgFutureTrait<DmaChannel = Self::DmaChannel, Pinout = Self::PinoutTx, TC = Self::Timer>;
+        type TimerCaptureBase: TimerCaptureBaseTrait<TC = Self::Timer, Pinout = Self::PinoutRx, ConvertibleToFuture<Self::DmaChannel> = Self::TimerCaptureFuture>;
         type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
         //  fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &'a mut Mclk) -> Self::PwmWg;
         fn collapse(self) -> Self::PinTx;
@@ -207,29 +208,25 @@ mod boiler_implementation {
         ) -> AtsamdEdgeTriggerCapture<'a, PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
-            todo!();
-            //  let pwm = PinoutSpecificData::new_pin(pwm_tx_pin, tc_timer, mclk).with_dma_channel(dma_channel);
-            //  let pwm = PwmWg4::<PB09>::new_waveform_generator(
-            //      periph_clock_freq,
-            //      Hertz::from_raw(32),
-            //      tc_timer,
-            //      TC4Pinout::<PB09>::new_pin(pwm_tx_pin),
-            //      mclk,
-            //  )
-            //  .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
-                                            // just for prototyping
-            // Self {
-            //     tx_pin: None,
-            //     rx_pin: Some(pin_rx),
-            //     tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-            //     pwm: Some(pwm),
-            //     capture_device: None,
-            //     dma: PhantomData,
-            //     mclk: mclk,
-            //     periph_clock_freq: periph_clock_freq,
-            //     timer_type: PhantomData,
-            //     mode: PhantomData,
-            // }
+            let pwm_generator_future = PinoutSpecificData::PwmBase::new_waveform_generator(
+                periph_clock_freq,
+                Hertz::from_raw(32),
+                tc_timer,
+                PinoutSpecificData::PinoutTx::new_pin(pwm_tx_pin),
+                mclk,
+            ).with_dma_channel(dma_channel);
+
+            Self {
+                tx_pin: None,
+                rx_pin: Some(pin_rx),
+                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+                pwm: Some(pwm_generator_future),
+                capture_device: None,
+                mclk: mclk,
+                periph_clock_freq: periph_clock_freq,
+                mode: PhantomData,
+                pinout: PhantomData,
+            }
         }
     }
 
@@ -300,29 +297,28 @@ mod boiler_implementation {
 
             let pinout = PinoutSpecificData::PinoutRx::new_pin(pwm_rx_pin);
 
-            todo!();
+            let timer_capture = 
+                    PinoutSpecificData::TimerCaptureBase::new_timer_capture(
+                periph_clock_freq,
+                Hertz::from_raw(32),
+                tc_timer,
+                pinout,
+                mclk,
+            )
+            .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
+                                            // just for prototyping
 
-            //  let timer_capture = 
-            //          PinoutSpecificData::TimerCaptureFuture::new_timer_capture(
-            //      periph_clock_freq,
-            //      Hertz::from_raw(32),
-            //      tc_timer,
-            //      pinout,
-            //      mclk,
-            //  )
-            //  .with_dma_channel(dma_channel); // TODO: Channel shall be changed to channel0 later on. This is
-            //                                  // just for prototyping
-            //  Self {
-            //      tx_pin: Some(pin_tx),
-            //      rx_pin: None,
-            //      tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
-            //      pwm: None,
-            //      capture_device: Some(timer_capture), //  TODO: Implement the capture device
-            //      dma: PhantomData,
-            //      mclk: mclk,
-            //      periph_clock_freq: periph_clock_freq,
-            //      mode: PhantomData,
-            //  }
+            Self {
+                tx_pin: Some(pin_tx),
+                rx_pin: None,
+                tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
+                pwm: None,
+                capture_device: Some(timer_capture), //  TODO: Implement the capture device
+                mclk: mclk,
+                periph_clock_freq: periph_clock_freq,
+                mode: PhantomData,
+                pinout: PhantomData,
+            }
         }
     }
 
@@ -537,7 +533,7 @@ use super::bsp;
 use bsp::pac;
 use bsp::hal::{
     time::Hertz,
-    timer_capture_waveform::TimerCapture4Future,
+    timer_capture_waveform::{TimerCaptureBaseTrait, TimerCapture4Future, TimerCapture4},
     dmac, dmac::ReadyFuture,
     pwm_wg::{PwmWg4, PwmBaseTrait},
     pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
@@ -558,6 +554,7 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4
     type DmaChannel = dmac::Channel<dmac::Ch0, ReadyFuture>;
     type PwmWg = PwmWg4Future<Self::PinTxId, Self::DmaChannel>;
     type TimerCaptureFuture = TimerCapture4Future<Self::PinRxId, Self::DmaChannel>;
+    type TimerCaptureBase = TimerCapture4<Self::PinRxId>;
     type PwmBase = PwmWg4<Self::PinTxId>;
     type Timer = pac::Tc4;
 

@@ -222,6 +222,27 @@ impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHan
 
 pub use crate::pwm::PinoutCollapse;
 
+pub trait TimerCaptureBaseTrait {
+    type TC;
+    type Pinout: PinoutCollapse;
+    type ConvertibleToFuture<D>: TimerCaptureFutureTrait<TC = Self::TC, Pinout = Self::Pinout, DmaChannel = D>
+    where
+        D: AnyChannel<Status=ReadyFuture>;
+
+    // fn get_dma_ptr(&self) -> TimerCaptureWaveformSourcePtr<u32>;
+    fn new_timer_capture(
+        clock_freq: Hertz,
+        freq: Hertz,
+        tc: Self::TC,
+        pinout: Self::Pinout,
+        mclk: &mut Mclk,
+        //  timeout: MillisDurationU32,
+    ) -> Self;
+    fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
+    where
+        CH: AnyChannel<Status=ReadyFuture>;
+}
+
 pub trait TimerCaptureFutureTrait {
     type DmaChannel;
     type TC;
@@ -254,6 +275,36 @@ pub struct $TYPE<I: PinId> {
     #[allow(dead_code)]
     pinout: $pinout<I>,
     //  _channel: Option<DmaCh>,
+}
+
+impl<I: PinId> TimerCaptureBaseTrait for $TYPE<I> {
+    type TC = crate::pac::$TC;
+    type Pinout = $pinout<I>;
+    type ConvertibleToFuture<D> = paste!{ [<$TYPE Future>]<I, D> }
+    where
+        D: AnyChannel<Status=ReadyFuture>;
+
+    //  fn get_dma_ptr(&self) -> TimerCaptureWaveformSourcePtr<u32> {
+    //      TimerCaptureWaveformSourcePtr(self.tc.count32().cc(TIMER_CHANNEL).as_ptr() as *mut _)
+    //  }
+
+    fn new_timer_capture(
+        clock_freq: Hertz,
+        freq: Hertz,
+        tc: crate::pac::$TC,
+        pinout: $pinout<I>,
+        mclk: &mut Mclk,
+        //  timeout: MillisDurationU32,
+    ) -> Self {
+        Self::new_timer_capture(clock_freq, freq, tc, pinout, mclk)
+    }
+
+    fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
+    where
+        CH: AnyChannel<Status=ReadyFuture>,
+    {
+        self.with_dma_channel(channel)
+    }
 }
 
 impl<I: PinId> typelevel::Sealed for $TYPE<I> {}
