@@ -34,7 +34,7 @@ use hal::{
     eic::{Eic, Sense},
     gpio::{Pin as GpioPin, PullUp, PullUpInterrupt},
     pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
-    pwm_wg::PwmWg4,
+    pwm_wg::{PwmWg4, PwmWg2},
     timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait, TimerCaptureBaseTrait},
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
@@ -99,8 +99,7 @@ async fn boiler_task() {}
 #[cfg(feature = "use_opentherm")]
 mod boiler_implementation {
     use crate::dmac::ReadyFuture;
-    use crate::hal::pwm_wg::{PwmWg4Future};
-    use crate::timer4_data_set::PinoutSpecificDataImplTc4;
+    use crate::timer_data_set::PinoutSpecificDataImplTc4;
     use atsamd_hal::gpio::G;
     use atsamd_hal::gpio::{Alternate, PullUpInput, pin::AnyPin};
     use atsamd_hal::pac::gclk::genctrl::OeR;
@@ -527,15 +526,15 @@ async fn toggle_pin_task(mut toggle_pin: GpioPin<PA17, Output<PushPull>>) {
     }
 }
 
-mod timer4_data_set {
-use crate::hal::pwm_wg::PwmWg4Future;
+mod timer_data_set {
+use crate::hal::pwm_wg::{PwmWg4Future, PwmWg2Future};
 use super::bsp;
 use bsp::pac;
 use bsp::hal::{
     time::Hertz,
-    timer_capture_waveform::{TimerCaptureBaseTrait, TimerCapture4Future, TimerCapture4},
+    timer_capture_waveform::{TimerCaptureBaseTrait, TimerCapture4Future, TimerCapture4, TimerCapture2Future, TimerCapture2},
     dmac, dmac::ReadyFuture,
-    pwm_wg::{PwmWg4, PwmBaseTrait},
+    pwm_wg::{PwmWg4, PwmWg2, PwmBaseTrait},
     pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
     gpio::{Pin, AnyPin, Output, Input, Alternate, OutputConfig, Pins, PushPull, PushPullOutput, Floating},
     gpio::{E, PB08, PB09, PA16, PA17},
@@ -573,6 +572,37 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4
     }
 
  }
+pub(super) struct PinoutSpecificDataImplTc2 {}
+
+impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc2 {
+    type PinTxId = PA17;
+    type PinRxId = PA16;
+    type PinTx = Pin<Self::PinTxId, Output<PushPull>>;
+    type PinRx = Pin<Self::PinRxId, Alternate<E>>;
+    type PinoutTx = TC2Pinout<Self::PinTxId>;
+    type PinoutRx = TC2Pinout<Self::PinRxId>;
+    type DmaChannel = dmac::Channel<dmac::Ch1, ReadyFuture>;
+    type PwmWg = PwmWg2Future<Self::PinTxId, Self::DmaChannel>;
+    type TimerCaptureFuture = TimerCapture2Future<Self::PinRxId, Self::DmaChannel>;
+    type TimerCaptureBase = TimerCapture2<Self::PinRxId>;
+    type PwmBase = PwmWg2<Self::PinTxId>;
+    type Timer = pac::Tc2;
+
+    //  fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
+    //      let pwm_tx_pin = pin.into_alternate::<E>();
+    //      Self::PwmBase::new_waveform_generator(
+    //          Hertz::from_raw(32),
+    //          Hertz::from_raw(32),
+    //          tc,
+    //          Self::PinoutTx::new_pin(pwm_tx_pin),
+    //          mclk,
+    //      ).with_dma_channel(dma)
+    //  }
+    fn collapse(self) -> Self::PinTx {
+        todo!()
+    }
+
+ }
 }
 
 #[embassy_executor::main]
@@ -585,7 +615,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     let pins = Pins::new(peripherals.port);
     let dev_dependency_tx_simulation_pin: GpioPin<PA17, Output<PushPull>> = pins.pa17.into_push_pull_output();
-    let dev_dependency_rx_simulation_pin: GpioPin<PA16, Input<Floating>> = pins.pa16.into_floating_input();
+    let dev_dependency_rx_simulation_pin: GpioPin<PA16, Input<PullUp>> = pins.pa16.into_pull_up_input();
     let receiver = CHANNEL.receiver();
 
     let mut clocks = GenericClockController::with_external_32kosc(
@@ -653,7 +683,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     spawner.spawn(print_capture_timer_state_task()).unwrap();
 
-    let pinout_specific_data = timer4_data_set::PinoutSpecificDataImplTc4{};
+    let pinout_specific_data = timer_data_set::PinoutSpecificDataImplTc4{};
 
     #[cfg(feature = "use_opentherm")]
     let mut edge_trigger_capture_dev =
@@ -664,7 +694,7 @@ async fn main(spawner: embassy_executor::Spawner) {
         //      input_clock_frequency: Hertz,
         //      pinout_factory: PinoutSpecificData,
         //  ) -> AtsamdEdgeTriggerCapture<'a, PinoutSpecificData, OtTx, N> {
-        boiler_implementation::AtsamdEdgeTriggerCapture::<'_, timer4_data_set::PinoutSpecificDataImplTc4>::new_with_default(
+        boiler_implementation::AtsamdEdgeTriggerCapture::<'_, timer_data_set::PinoutSpecificDataImplTc4>::new_with_default(
             pwm_tx_pin,
             pwm_rx_pin,
             tc4_timer,
@@ -674,16 +704,19 @@ async fn main(spawner: embassy_executor::Spawner) {
             channel0,
         );
 
-    //  #[cfg(feature = "use_opentherm")]
-    //  let mut edge_trigger_capture_simulation_device =
-    //      boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
-    //          dev_dependency_tx_simulation_pin,
-    //          dev_dependency_rx_simulation_pin,
-    //          tc2_timer,
-    //          &mut peripherals.mclk,
-    //          clocks.tc2_tc3(&gclk0).unwrap().freq(),
-    //          channel1,
-    //      );
+    let pinout_specific_data_tc2 = timer_data_set::PinoutSpecificDataImplTc2{};
+
+    #[cfg(feature = "use_opentherm")]
+    let mut edge_trigger_capture_simulation_device =
+        boiler_implementation::AtsamdEdgeTriggerCapture::<'_, timer_data_set::PinoutSpecificDataImplTc2>::new_with_default(
+            dev_dependency_tx_simulation_pin,
+            dev_dependency_rx_simulation_pin,
+            tc2_timer,
+            &mut peripherals.mclk,
+            clocks.tc2_tc3(&gclk0).unwrap().freq(),
+            pinout_specific_data_tc2,
+            channel1,
+        );
 
     //  let _time_driver = boiler_implementation::AtsamdTimeDriver::new();
     //  let mut boiler_controller = BoilerControl::new(edge_trigger_capture_dev, time_driver);
