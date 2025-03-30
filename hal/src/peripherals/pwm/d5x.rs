@@ -112,7 +112,9 @@ impl_tc_pinout!(TC2Pinout: [
     #[hal_cfg("pa13")]
     (Pa13, PA13),
     #[hal_cfg("pa17")]
-    (Pa17, PA17)
+    (Pa17, PA17),
+    #[hal_cfg("pa16")]
+    (Pa16, PA16)
 ]);
 
 #[hal_cfg("tc3")]
