@@ -235,7 +235,7 @@ pub trait TimerCaptureBaseTrait {
         freq: Hertz,
         tc: Self::TC,
         pinout: Self::Pinout,
-        mclk: &mut Mclk,
+        mclk: Option<&mut Mclk>,
         //  timeout: MillisDurationU32,
     ) -> Self;
     fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
@@ -293,7 +293,7 @@ impl<I: PinId> TimerCaptureBaseTrait for $TYPE<I> {
         freq: Hertz,
         tc: crate::pac::$TC,
         pinout: $pinout<I>,
-        mclk: &mut Mclk,
+        mclk: Option<&mut Mclk>,
         //  timeout: MillisDurationU32,
     ) -> Self {
         Self::new_timer_capture(clock_freq, freq, tc, pinout, mclk)
@@ -426,7 +426,7 @@ impl<I: PinId> $TYPE<I> {
         freq: Hertz,
         tc: crate::pac::$TC,
         pinout: $pinout<I>,
-        mclk: &mut Mclk,
+        mclk: Option<&mut Mclk>,
         //  timeout: MillisDurationU32,
     ) -> Self {
         //  TODO: Calculate the valuee of the compare match register:
@@ -437,13 +437,19 @@ impl<I: PinId> $TYPE<I> {
 
         //  write(|w| w.ccbuf().bits(duty as u8));
         let params = TimerParams::new(freq.convert(), clock_freq);
-        mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
-        //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
-        //  datasheet declarations so be cerful.
-        mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
-        //  TODO: Dirty hack to allow TC2 + TC5 timers work in 32 bits. This is somewhat against
-        //  datasheet declarations so be cerful.
-        mclk.apbbmask().modify(|_, w| w.tc3_().set_bit());
+
+        match mclk {
+            Some(mclk) => {
+                mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
+                //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
+                //  datasheet declarations so be cerful.
+                mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
+                //  TODO: Dirty hack to allow TC2 + TC5 timers work in 32 bits. This is somewhat against
+                //  datasheet declarations so be cerful.
+                mclk.apbbmask().modify(|_, w| w.tc3_().set_bit());
+            }
+            None => {}
+        }
 
         // First disable the tiemer, only after that we can set SWRST bit.
         count.ctrla().modify(|_, w| w.enable().clear_bit());

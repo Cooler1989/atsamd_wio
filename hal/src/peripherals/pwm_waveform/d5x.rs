@@ -62,7 +62,7 @@ pub trait PwmBaseTrait {
         freq: Hertz,
         tc: Self::TC,
         pinout: Self::Pinout,
-        mclk: &mut Mclk,
+        mclk: Option<&mut Mclk>,
     ) -> Self;
     fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
     where
@@ -178,7 +178,7 @@ impl<I: PinId> PwmBaseTrait for $TYPE<I> {
         freq: Hertz,
         tc: Self::TC,
         pinout: Self::Pinout,
-        mclk: &mut Mclk,
+        mclk: Option<&mut Mclk>,
     ) -> Self {
         const TIEMR_PERIOD: u8 = 233;  //  mclk / 256 / 233 = 1000 Hz
         let count = tc.count8();
@@ -187,7 +187,13 @@ impl<I: PinId> PwmBaseTrait for $TYPE<I> {
 
         //  write(|w| w.ccbuf().bits(duty as u8));
         let _params = TimerParams::new(freq.convert(), clock_freq);
-        mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
+        //  Works as a mask: you can only enable the clock not disable it. TODO: check if it is set in read only/steal method.
+        match mclk {
+            Some(mclk) => {
+                mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
+            }
+            None => {}
+        }
         count.ctrla().write(|w| w.swrst().set_bit());
         while count.ctrla().read().bits() & 1 != 0 {}
         count.ctrla().modify(|_, w| w.enable().clear_bit());
@@ -367,3 +373,5 @@ pwm_wg! { PwmWg5: (Tc5, TC5Pinout, Tc4Tc5Clock, apbcmask, tc5_, PwmWg5Wrapper, T
 pwm_wg! { PwmWg6: (Tc6, TC6Pinout, Tc6Tc7Clock, apbdmask, tc6_, PwmWg6Wrapper, Tc6Ovf) }
 #[hal_cfg("tc7")]
 pwm_wg! { PwmWg7: (Tc7, TC7Pinout, Tc6Tc7Clock, apbdmask, tc7_, PwmWg7Wrapper, Tc7Ovf) }
+
+    //  ($($TYPE:ident: ($TC:ident, $pinout:ident, $clock:ident, $apmask:ident, $apbits:ident, $wrapper:ident, $event:ident)),+) => {
