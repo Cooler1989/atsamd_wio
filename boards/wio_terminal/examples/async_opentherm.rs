@@ -132,7 +132,7 @@ mod boiler_implementation {
         type TimerCaptureBase: TimerCaptureBaseTrait<TC = Self::Timer, Pinout = Self::PinoutRx, ConvertibleToFuture<Self::DmaChannel> = Self::TimerCaptureFuture>;
         type TimerCaptureFuture: TimerCaptureFutureTrait<DmaChannel = Self::DmaChannel, TC = Self::Timer, Pinout = Self::PinoutRx>;
         //  fn new_pwm_generator<'a>(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg;
-        fn collapse(self) -> Self::PinTx;
+        //  fn collapse(self) -> Self::PinTx;
     }
 
     pub(super) struct AtsamdEdgeTriggerCapture<
@@ -557,9 +557,9 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4
     //          mclk,
     //      ).with_dma_channel(dma)
     //  }
-    fn collapse(self) -> Self::PinTx {
-        todo!()
-    }
+    //  //    fn collapse(self) -> Self::PinTx {
+    //  //        todo!()
+    //  //    }
 
  }
 pub(super) struct PinoutSpecificDataImplTc2 {}
@@ -588,9 +588,9 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc2
     //          mclk,
     //      ).with_dma_channel(dma)
     //  }
-    fn collapse(self) -> Self::PinTx {
-        todo!()
-    }
+    //  fn collapse(self) -> Self::PinTx {
+    //      todo!()
+    //  }
 
  }
 }
@@ -724,88 +724,101 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
     
-    //  Test one round of TX(simulation) -> RX(production)
-    let tx_async_simulation =  async { 
-        sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await; 
-        //  let (device, result) =
-        //      edge_trigger_capture_simulation_device.send_open_therm_message(
-        //          OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
-    };
-
-    let rx_async = async {
-        let dur = Duration::from_millis(100);
-        let (tx_device, result) =
-            edge_trigger_capture_dev.start_capture(dur, dur).await;
-            //  edge_trigger_capture_dev.send_open_therm_message(
-            //      OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
-        tx_device
-    };
-
-    //  TODO: how to join the two futures and return devices as a result after execution?
-    let (tx_result, rx_result) =
-        embassy_futures::join::join(tx_async_simulation, rx_async).await;
-
-    let mut edge_trigger_capture_dev = rx_result;
-
-    let time_d = core::time::Duration::from_millis(100);
-    let time_d :u32 = time_d.as_millis().try_into().unwrap();
-    hprintln!("Start Capture: {}", time_d).ok();
-
-    let mut count_iterations: u32 = 0;
     loop {
-        Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
-        let device = edge_trigger_capture_dev;
-        //  hprintln!("Wait long before starting the capture").ok();
-        //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
-        hprintln!("Start Capture {}", count_iterations).ok();
-        let dur = Duration::from_millis(100);
-        // trigger gpio simulation of the OpenTherm TX message
-        sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
-        let (rx_device, result) =
-            device.start_capture(dur, dur).await;
+        //  Test one round of TX(simulation) -> RX(production)
+        let tx_async_simulation =  async { 
+            sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await; 
+            let (device, result) =
+                edge_trigger_capture_simulation_device.send_open_therm_message(
+                    OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
+            device
+        };
 
-        if let Ok((level, vector)) = result {
-            hprintln!("Capture finished with: {}", vector.len()).ok();
-            let differences: Vec<u128, 128> = vector
-                .iter()
-                .zip(vector.iter().skip(1))
-                .map(|(a, b)| if b > a {b.as_micros() - a.as_micros()} else {0}).collect();
+        let rx_async = async {
+            let dur = Duration::from_millis(100);
+            let (tx_device, result) =
+                edge_trigger_capture_dev./*start_capture(dur, dur).await;*/
+                    listen_open_therm_message()/* -> (Self, Result<OpenThermMessage, Error>)*/.await;
+            match result {
+                Ok(message) => {
+                    hprintln!("Capture finished with opentherm message: {}", message).ok();
+                },
+                Err(_) => { hprintln!("Capture finished with error on OpenThermMessage").ok(); }
+            }
+            tx_device
+        };
 
-            //  for (i, v) in differences.into_iter().enumerate() {
-            //      hprintln!("{}:{} us", i, v).ok();
-            //  }
-        }
-        hprintln!("Finish Capture {}", count_iterations).ok();
-        Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+        //  TODO: how to join the two futures and return devices as a result after execution?
+        let (tx_result, rx_result) =
+            embassy_futures::join::join(tx_async_simulation, rx_async).await;
 
-        hprintln!("Start FullOpentherm Capture {}", count_iterations).ok();
-        let dur = Duration::from_millis(100);
-        // trigger gpio simulation of the OpenTherm TX message
-        sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
-        let (rx_device, result) =
-            rx_device.listen_open_therm_message().await;
-        if let Ok(message) = result {
-            hprintln!("Capture finished with opentherm message: {}", message).ok();
-        }
-        else
-        {
-            //  TODO: extend the analysis of what is wrong with this capture here:
-            hprintln!("Capture finished with error on OpenThermMessage").ok();
-        }
-        hprintln!("Finish Capture {}", count_iterations).ok();
-        Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+        //  TODO: Count successes and errors.
 
-        hprintln!("Start Trigger {}", count_iterations).ok();
-        let tx_device = rx_device.transition_to_trigger_capable_device();
-        let (tx_device, result) =
-            tx_device.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
-
-        edge_trigger_capture_dev = tx_device.transition_to_capture_capable_device();
-        //  let _ = boiler_controller.process().await.unwrap();
-
-        user_led.toggle().unwrap();
-        count_iterations += 1;
+        edge_trigger_capture_dev = rx_result;
+        edge_trigger_capture_simulation_device = tx_result;
     }
+
+    //  let mut edge_trigger_capture_dev = rx_result;
+
+    //  let time_d = core::time::Duration::from_millis(100);
+    //  let time_d :u32 = time_d.as_millis().try_into().unwrap();
+    //  hprintln!("Start Capture: {}", time_d).ok();
+
+    //  let mut count_iterations: u32 = 0;
+    //  loop {
+    //      Mono::delay(MillisDuration::<u32>::from_ticks(200).convert()).await;
+    //      let device = edge_trigger_capture_dev;
+    //      //  hprintln!("Wait long before starting the capture").ok();
+    //      //  Mono::delay(MillisDuration::<u32>::from_ticks(500).convert()).await;
+    //      hprintln!("Start Capture {}", count_iterations).ok();
+    //      let dur = Duration::from_millis(100);
+    //      // trigger gpio simulation of the OpenTherm TX message
+    //      sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
+    //      let (rx_device, result) =
+    //          device.start_capture(dur, dur).await;
+
+    //      if let Ok((level, vector)) = result {
+    //          hprintln!("Capture finished with: {}", vector.len()).ok();
+    //          let differences: Vec<u128, 128> = vector
+    //              .iter()
+    //              .zip(vector.iter().skip(1))
+    //              .map(|(a, b)| if b > a {b.as_micros() - a.as_micros()} else {0}).collect();
+
+    //          //  for (i, v) in differences.into_iter().enumerate() {
+    //          //      hprintln!("{}:{} us", i, v).ok();
+    //          //  }
+    //      }
+    //      hprintln!("Finish Capture {}", count_iterations).ok();
+    //      Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+
+    //      hprintln!("Start FullOpentherm Capture {}", count_iterations).ok();
+    //      let dur = Duration::from_millis(100);
+    //      // trigger gpio simulation of the OpenTherm TX message
+    //      sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
+    //      let (rx_device, result) =
+    //          rx_device.listen_open_therm_message().await;
+    //      if let Ok(message) = result {
+    //          hprintln!("Capture finished with opentherm message: {}", message).ok();
+    //      }
+    //      else
+    //      {
+    //          //  TODO: extend the analysis of what is wrong with this capture here:
+    //          hprintln!("Capture finished with error on OpenThermMessage").ok();
+    //      }
+    //      hprintln!("Finish Capture {}", count_iterations).ok();
+    //      Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
+
+    //      hprintln!("Start Trigger {}", count_iterations).ok();
+    //      let tx_device = rx_device.transition_to_trigger_capable_device();
+    //      let (tx_device, result) =
+    //          tx_device.send_open_therm_message(OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
+
+    //      edge_trigger_capture_dev = tx_device.transition_to_capture_capable_device();
+    //      //  let _ = boiler_controller.process().await.unwrap();
+
+    //      user_led.toggle().unwrap();
+    //      count_iterations += 1;
+    //  }
 
     //  let _ot_rx: GpioPin<_, PullUpInterrupt> = pins.pb08.into(); // D0
     //                                                              //  let pb_09_ot_tx: GpioPin<_, PushPullOutput> = pins.pb09.into(); // D1
