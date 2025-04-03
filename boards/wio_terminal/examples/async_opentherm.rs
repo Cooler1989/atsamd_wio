@@ -113,7 +113,7 @@ mod boiler_implementation {
     use super::*;
 
     trait AtsamdEdgeTriggerCaptureFactory{
-    
+
     }
 
     const VEC_SIZE_CAPTURE: usize = 128;
@@ -272,7 +272,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<PinoutSpecificData, const N: usize> 
+    impl<PinoutSpecificData, const N: usize>
             AtsamdEdgeTriggerCapture<PinoutSpecificData, OtRx, N>
     where
         PinoutSpecificData: CreatePwmPinout,
@@ -288,7 +288,7 @@ mod boiler_implementation {
 
             let pinout = PinoutSpecificData::PinoutRx::new_pin(pwm_rx_pin);
 
-            let timer_capture = 
+            let timer_capture =
                     PinoutSpecificData::TimerCaptureBase::new_timer_capture(
                 periph_clock_freq,
                 Hertz::from_raw(32),
@@ -312,8 +312,8 @@ mod boiler_implementation {
         }
     }
 
-    impl<PinoutSpecificData, const N: usize> EdgeTriggerInterface 
-    for 
+    impl<PinoutSpecificData, const N: usize> EdgeTriggerInterface
+    for
         AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N>
     where
         PinoutSpecificData: CreatePwmPinout,
@@ -530,7 +530,7 @@ use bsp::hal::{
     gpio::{E, PB08, PB09, PA16, PA17},
 };
 use crate::pac::Mclk;
-    
+
 pub(super) struct PinoutSpecificDataImplTc4 {}
 
 impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4 {
@@ -644,9 +644,9 @@ async fn main(spawner: embassy_executor::Spawner) {
     //      );
 
     //  #[cfg(feature = "use_opentherm")]
-    //  spawner.spawn(full_boiler_opentherm_simulation(dev_dependency_tx_simulation_pin, 
-    //      dev_dependency_rx_simulation_pin, 
-    //      tc2_timer, channel1, 
+    //  spawner.spawn(full_boiler_opentherm_simulation(dev_dependency_tx_simulation_pin,
+    //      dev_dependency_rx_simulation_pin,
+    //      tc2_timer, channel1,
     //      &mut peripherals.mclk,
     //      &clocks.tc2_tc3(&gclk0).unwrap(),
     //  )).unwrap();
@@ -671,7 +671,7 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut user_led: UserLed = pins.pa15.into();
     user_led.toggle().unwrap();
 
-    spawner.spawn(print_capture_timer_state_task()).unwrap();
+    //  spawner.spawn(print_capture_timer_state_task()).unwrap();
 
     let pinout_specific_data = timer_data_set::PinoutSpecificDataImplTc4{};
 
@@ -723,11 +723,13 @@ async fn main(spawner: embassy_executor::Spawner) {
     let sender_trigger_tx_sequence = CHANNEL.sender();
 
     Mono::delay(MillisDuration::<u32>::from_ticks(5000).convert()).await;
-    
+
+    let mut count_all = 0;
+    let mut count_success = 0;
     loop {
         //  Test one round of TX(simulation) -> RX(production)
-        let tx_async_simulation =  async { 
-            sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await; 
+        let tx_async_simulation =  async {
+            sender_trigger_tx_sequence.send(SignalTxSimulation::Ready_).await;
             let (device, result) =
                 edge_trigger_capture_simulation_device.send_open_therm_message(
                     OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
@@ -739,11 +741,13 @@ async fn main(spawner: embassy_executor::Spawner) {
             let (tx_device, result) =
                 edge_trigger_capture_dev./*start_capture(dur, dur).await;*/
                     listen_open_therm_message()/* -> (Self, Result<OpenThermMessage, Error>)*/.await;
+            count_all += 1;
             match result {
                 Ok(message) => {
-                    hprintln!("Capture finished with opentherm message: {}", message).ok();
+                    count_success += 1;
+                    hprintln!("Capture finished with opentherm message: {}, rate: {}/{}", message, count_success, count_all).ok();
                 },
-                Err(_) => { hprintln!("Capture finished with error on OpenThermMessage").ok(); }
+                Err(e) => { hprintln!("Capture finished with error on OpenThermMessage: {}, rate: {}/{}", e, count_success, count_all).ok(); }
             }
             tx_device
         };
@@ -998,8 +1002,8 @@ async fn print_timer_state_task(/*mut uart_tx: UartFutureTxDuplexDma<Config<bsp:
 }
 
 #[embassy_executor::task]
-async fn full_boiler_opentherm_simulation(tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>, 
-    timer: pac::Tc2, dma_channel: hal::dmac::Channel<hal::dmac::Ch1, ReadyFuture>, 
+async fn full_boiler_opentherm_simulation(tx_pin: GpioPin<PA17, Output<PushPull>>, mut rx_pin: GpioPin<PA16, Input<Floating>>,
+    timer: pac::Tc2, dma_channel: hal::dmac::Channel<hal::dmac::Ch1, ReadyFuture>,
     mclk: &'static mut Mclk,
     timer_clocks: &'static Tc2Tc3Clock)
 {
