@@ -169,7 +169,7 @@ mod boiler_implementation {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
             let pwm_generator_future = PinoutSpecificData::PwmBase::new_waveform_generator(
-                Hertz::from_raw(32),
+                input_clock_frequency,
                 Hertz::from_raw(32),
                 tc_timer,
                 PinoutSpecificData::PinoutTx::new_pin(pwm_tx_pin),
@@ -547,20 +547,6 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc4
     type PwmBase = PwmWg4<Self::PinTxId>;
     type Timer = pac::Tc4;
 
-    //  fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
-    //      let pwm_tx_pin = pin.into_alternate::<E>();
-    //      Self::PwmBase::new_waveform_generator(
-    //          Hertz::from_raw(32),
-    //          Hertz::from_raw(32),
-    //          tc,
-    //          Self::PinoutTx::new_pin(pwm_tx_pin),
-    //          mclk,
-    //      ).with_dma_channel(dma)
-    //  }
-    //  //    fn collapse(self) -> Self::PinTx {
-    //  //        todo!()
-    //  //    }
-
  }
 pub(super) struct PinoutSpecificDataImplTc2 {}
 
@@ -577,20 +563,6 @@ impl super::boiler_implementation::CreatePwmPinout for PinoutSpecificDataImplTc2
     type TimerCaptureBase = TimerCapture2<Self::PinRxId>;
     type PwmBase = PwmWg2<Self::PinTxId>;
     type Timer = pac::Tc2;
-
-    //  fn new_pwm_generator(pin: Self::PinTx, tc: Self::Timer, dma: Self::DmaChannel, mclk: &mut Mclk) -> Self::PwmWg {
-    //      let pwm_tx_pin = pin.into_alternate::<E>();
-    //      Self::PwmBase::new_waveform_generator(
-    //          Hertz::from_raw(32),
-    //          Hertz::from_raw(32),
-    //          tc,
-    //          Self::PinoutTx::new_pin(pwm_tx_pin),
-    //          mclk,
-    //      ).with_dma_channel(dma)
-    //  }
-    //  fn collapse(self) -> Self::PinTx {
-    //      todo!()
-    //  }
 
  }
 }
@@ -677,20 +649,13 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     #[cfg(feature = "use_opentherm")]
     let mut edge_trigger_capture_dev =
-    //  impl<PinoutSpecificData, const N: usize> AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N>
-        //  pub fn new_with_default(
-        //      tc_timer: T /*pac::Tc4*/,
-        //      mclk: &mut Mclk,
-        //      input_clock_frequency: Hertz,
-        //      pinout_factory: PinoutSpecificData,
-        //  ) -> AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N> {
-        boiler_implementation::AtsamdEdgeTriggerCapture::<timer_data_set::PinoutSpecificDataImplTc4>::new_with_default(
+        boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
             pwm_tx_pin,
             pwm_rx_pin,
             tc4_timer,
             &mut peripherals.mclk,
             clocks.tc4_tc5(&gclk0).unwrap().freq(),
-            pinout_specific_data,
+            pinout_specific_data,  // determines all the types
             channel0,
         );
 
@@ -738,16 +703,19 @@ async fn main(spawner: embassy_executor::Spawner) {
 
         let rx_async = async {
             let dur = Duration::from_millis(100);
+            let start_time = Mono::now();
             let (tx_device, result) =
                 edge_trigger_capture_dev./*start_capture(dur, dur).await;*/
                     listen_open_therm_message()/* -> (Self, Result<OpenThermMessage, Error>)*/.await;
+            let duration = Mono::now() - start_time;
             count_all += 1;
             match result {
                 Ok(message) => {
                     count_success += 1;
-                    hprintln!("Capture finished with opentherm message: {}, rate: {}/{}", message, count_success, count_all).ok();
+                    hprintln!("Capture finished with opentherm message: {}, took: {}, rate: {}/{}", message, duration, count_success, count_all).ok();
                 },
-                Err(e) => { hprintln!("Capture finished with error on OpenThermMessage: {}, rate: {}/{}", e, count_success, count_all).ok(); }
+                Err(e) => {
+                    hprintln!("Capture finished with error on OpenThermMessage: {}, took: {}, rate: {}/{}", e, duration, count_success, count_all).ok(); }
             }
             tx_device
         };
