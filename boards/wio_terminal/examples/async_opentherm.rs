@@ -35,7 +35,7 @@ use hal::{
     gpio::{Pin as GpioPin, PullUp, PullUpInterrupt},
     pwm::{TC4Pinout, TC2Pinout, PinoutNewTrait},
     pwm_wg::{PwmWg4, PwmWg2},
-    timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait, TimerCaptureBaseTrait},
+    timer_capture_waveform::{TimerCapture4, TimerCapture4Future, TimerCaptureFutureTrait, TimerCaptureBaseTrait, TimerCaptureResultAvailable},
 };
 use wio_terminal::prelude::_embedded_hal_blocking_delay_DelayMs;
 
@@ -377,7 +377,7 @@ mod boiler_implementation {
                 .unwrap()
                 .start_timer_prepare_dma_transfer(&mut capture_memory).await;
                 //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
-            if let Ok(timer_value_at_termination) = result {
+            if let Ok(capture_result) = result {
                 let mut timestamps = Vec::<core::time::Duration, N>::new();
                 //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
                 let _ = timestamps.push(core::time::Duration::from_micros(0u64));
@@ -387,7 +387,16 @@ mod boiler_implementation {
                         let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
                     }
                 }
-                let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
+                match capture_result {
+                    TimerCaptureResultAvailable::DmaPollReady(timer_value_at_termination) => {
+                        let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
+                        hprintln!("TimerCaptureResultAvailable::DmaPollReady: {}", timer_value_at_termination.get_raw_value()).ok();
+                    }
+                    TimerCaptureResultAvailable::TimerTimeout(timer_value_at_termination) => {
+                        let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
+                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: {}", timer_value_at_termination.get_raw_value()).ok();
+                    }
+                }
                 (self, Ok((InitLevel::High, timestamps)))
             }
             else {

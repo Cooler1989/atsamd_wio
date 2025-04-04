@@ -24,6 +24,9 @@ use pin_project::pin_project;
 
 use paste::paste;
 
+///  Channel 0 is used to capture the counter value while channel 1 is used to trigger interrupt
+///  used for timeout handling
+
 const TIMER_CHANNEL: usize = 0;
 //  Second channel may be used for timeout detection. CCx can thus be set to some value
 //  that will be compared with current value of the counter and trigger interrupt when the value matches.
@@ -69,12 +72,25 @@ struct TimerCaptureDmaWrapper<'a, DmaFut, T> {
     _timer: &'a T,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CounterValueAtTermination(u32);
 
 impl CounterValueAtTermination {
     pub fn get_raw_value(self) -> u32 {
         self.0
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimerCaptureResultAvailable {
+    DmaPollReady(CounterValueAtTermination),
+    TimerTimeout(CounterValueAtTermination),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimerCaptureFailure {
+    DmaFailed(DmacError),
+    TimerFailed,
 }
 
 impl<'a, DmaFut, T> TimerCaptureDmaWrapper<'a, DmaFut, T> {
@@ -88,7 +104,7 @@ where
     DmaFut: core::future::Future<Output = Result<(), DmacError>>,
     T: TimerCounterStart,
 {
-    type Output = Result<CounterValueAtTermination, DmacError>;
+    type Output = Result<TimerCaptureResultAvailable, TimerCaptureFailure>;
 
     fn poll(
         mut self: core::pin::Pin<&mut Self>,
@@ -106,7 +122,7 @@ where
             this._timer.disable_interrupt();
             let counter_value = this._timer.counter_value();
             //  TODO: add check on the mc1 flag related to timeout
-            return core::task::Poll::Ready(Ok(CounterValueAtTermination(counter_value)));
+            return core::task::Poll::Ready(Ok(TimerCaptureResultAvailable::DmaPollReady(CounterValueAtTermination(counter_value))));
         }
 
         if *this.timer_started == false {
@@ -119,12 +135,14 @@ where
             this._timer.enable_interrupt();
         }
 
-        let result = if MC1_INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
+        //  Check if the interrupt was fired:
+        let result = if 
+            MC1_INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
             //  counter_value
             this._timer.stop();
             this._timer.disable_interrupt();
             let counter_value = this._timer.counter_value();
-            core::task::Poll::Ready(Ok(CounterValueAtTermination(counter_value)))
+            core::task::Poll::Ready(Ok(TimerCaptureResultAvailable::TimerTimeout(CounterValueAtTermination(counter_value))))
         } else {
             use waker::WAKERS;
             //  TODO: Do I have to disable interrupt/ put registartion into critical section?
@@ -249,8 +267,8 @@ pub trait TimerCaptureFutureTrait {
     type Pinout: PinoutCollapse;
     fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
     //  fn start_regular_pwm(&mut self, ccx_value: u8);
-    async fn start_timer_prepare_dma_transfer(&mut self, capture_memory: &mut [u32]) 
-        -> Result<CounterValueAtTermination,DmacError>;
+    async fn start_timer_prepare_dma_transfer(&mut self, capture_memory: &mut [u32])
+        -> Result<TimerCaptureResultAvailable, TimerCaptureFailure>;
 }
 
 macro_rules! create_timer_capture {
@@ -375,7 +393,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
         (self._channel, tc, pinout)
     }
     /// The capture_memorys first element will be the value of the counter at the moment of the first event. The timer starts counting from zero, which mean the first period can be assumed as the value of the first element in the memory.
-    async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) -> Result<CounterValueAtTermination,DmacError> {
+    async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) 
+        -> Result<TimerCaptureResultAvailable, TimerCaptureFailure> {
 
         let count = self.base_pwm.tc.count32();
 
@@ -395,7 +414,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
 
         //  TODO: Change the implementation of the DMA channel so that the timer can be started before the DMA gets enabled
         //  First poll the future starts the DMA transfer. It sets enable bit of the DMA.
-        dma_wrapped_future.await
+         let result = dma_wrapped_future.await;
         //  Right after the DMA transfer is started, we can start the timer.
 
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
@@ -406,7 +425,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
 
         // wait for the settings to be applied
         //  while count.syncbusy().read().cc0().bit_is_set() {}
-
+        result
     }
 
 }
@@ -423,7 +442,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
 impl<I: PinId> $TYPE<I> {
     pub fn new_timer_capture(
         clock_freq: Hertz,
-        freq: Hertz,
+        _freq: Hertz,
         tc: crate::pac::$TC,
         pinout: $pinout<I>,
         mclk: Option<&mut Mclk>,
@@ -436,7 +455,7 @@ impl<I: PinId> $TYPE<I> {
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
 
         //  write(|w| w.ccbuf().bits(duty as u8));
-        let params = TimerParams::new(freq.convert(), clock_freq);
+        //  let params = TimerParams::new(freq.convert(), clock_freq);
 
         match mclk {
             Some(mclk) => {
@@ -444,22 +463,23 @@ impl<I: PinId> $TYPE<I> {
                 //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
                 //  datasheet declarations so be cerful.
                 mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
-                //  TODO: Dirty hack to allow TC2 + TC5 timers work in 32 bits. This is somewhat against
-                //  datasheet declarations so be cerful.
+                //  TODO: Dirty hack to allow TC2 + TC3 timers work in 32 bits. This is somewhat against
+                //  datasheet declarations so be cerful.In the future I expect it will be added to
+                //  take over the ownership of the other timer as well so that it is blocked to be
+                //  used for other purposes.
                 mclk.apbbmask().modify(|_, w| w.tc3_().set_bit());
             }
             None => {}
         }
 
-        // First disable the tiemer, only after that we can set SWRST bit.
+        // First disable the timer, only after that we should set SWRST bit.
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
 
         count.ctrla().write(|w| w.swrst().set_bit());
         while count.ctrla().read().bits() & 1 != 0 {}
 
-        //  TODO:  resolve copen1 question:
-        //  count.ctrla().modify(|_, w| w.copen1().set_bit());
+        //  Set the timer to 32-bit mode:
         count.ctrla().modify(|_, w| w.mode().count32());
         count.ctrla().modify(|_, w| {
             w.prescaler().div1()
@@ -475,12 +495,11 @@ impl<I: PinId> $TYPE<I> {
             //      _ => unreachable!(),
             //  }
         });
+        //  TODO: Set capten0 and clear capten1.
         count.ctrla().modify(|_, w| w.capten0().set_bit().copen0().set_bit());
-        //  count.ctrla().modify(|w| w.copen0().set_bit());
 
         //  clear all interrupt flags:
         count.intflag().write(|w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
-        count.intflag().write(|w| w.mc1().set_bit());
 
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
         // enable interrupt on the timeout side channel:
