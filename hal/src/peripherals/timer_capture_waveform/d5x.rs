@@ -356,7 +356,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh>
 impl<I: PinId> $TYPE<I> {
     pub fn new_timer_capture(
         clock_freq: Hertz,
-        freq: Hertz,
+        _freq: Hertz,
         tc: crate::pac::$TC,
         pinout: $pinout<I>,
         mclk: &mut Mclk,
@@ -369,7 +369,7 @@ impl<I: PinId> $TYPE<I> {
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
 
         //  write(|w| w.ccbuf().bits(duty as u8));
-        let params = TimerParams::new(freq.convert(), clock_freq);
+        //  let params = TimerParams::new(freq.convert(), clock_freq);
         mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
         //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
         //  datasheet declarations so be cerful.
@@ -404,7 +404,6 @@ impl<I: PinId> $TYPE<I> {
 
         //  clear all interrupt flags:
         count.intflag().write(|w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
-        count.intflag().write(|w| w.mc1().set_bit());
 
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
         // enable interrupt on the timeout side channel:

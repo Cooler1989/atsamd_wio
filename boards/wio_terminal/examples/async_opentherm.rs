@@ -774,9 +774,9 @@ async fn main(spawner: embassy_executor::Spawner) {
                 .zip(vector.iter().skip(1))
                 .map(|(a, b)| if b > a {b.as_micros() - a.as_micros()} else {0}).collect();
 
-            //  for (i, v) in differences.into_iter().enumerate() {
-            //      hprintln!("{}:{} us", i, v).ok();
-            //  }
+            for (i, v) in differences.into_iter().enumerate() {
+                hprintln!("{}:{} us", i, v).ok();
+            }
         }
         hprintln!("Finish Capture {}", count_iterations).ok();
         Mono::delay(MillisDuration::<u32>::from_ticks(50).convert()).await;
