@@ -136,7 +136,7 @@ where
         }
 
         //  Check if the interrupt was fired:
-        let result = if 
+        let result = if
             MC1_INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
             //  counter_value
             this._timer.stop();
@@ -256,6 +256,7 @@ pub trait TimerCaptureBaseTrait {
         mclk: Option<&mut Mclk>,
         //  timeout: MillisDurationU32,
     ) -> Self;
+    fn enable_mclk_clocks(mclk: &mut Mclk);
     fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
     where
         CH: AnyChannel<Status=ReadyFuture>;
@@ -306,6 +307,10 @@ impl<I: PinId> TimerCaptureBaseTrait for $TYPE<I> {
     //      TimerCaptureWaveformSourcePtr(self.tc.count32().cc(TIMER_CHANNEL).as_ptr() as *mut _)
     //  }
 
+    fn enable_mclk_clocks(mclk: &mut Mclk)
+    {
+        Self::enable_mclk_clocks(mclk);
+    }
     fn new_timer_capture(
         clock_freq: Hertz,
         freq: Hertz,
@@ -393,7 +398,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
         (self._channel, tc, pinout)
     }
     /// The capture_memorys first element will be the value of the counter at the moment of the first event. The timer starts counting from zero, which mean the first period can be assumed as the value of the first element in the memory.
-    async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32]) 
+    async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32])
         -> Result<TimerCaptureResultAvailable, TimerCaptureFailure> {
 
         let count = self.base_pwm.tc.count32();
@@ -530,6 +535,18 @@ impl<I: PinId> $TYPE<I> {
                 _channel: channel,
             }
         }
+    }
+
+    pub fn enable_mclk_clocks(mclk: &mut Mclk) {
+        mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
+        //  TODO: Dirty hack to allow TC4 + TC5 timers work in 32 bits. This is somewhat against
+        //  datasheet declarations so be cerful.
+        mclk.apbcmask().modify(|_, w| w.tc5_().set_bit());
+        //  TODO: Dirty hack to allow TC2 + TC3 timers work in 32 bits. This is somewhat against
+        //  datasheet declarations so be cerful.In the future I expect it will be added to
+        //  take over the ownership of the other timer as well so that it is blocked to be
+        //  used for other purposes.
+        mclk.apbbmask().modify(|_, w| w.tc3_().set_bit());
     }
 
     pub fn start(&self) {

@@ -166,6 +166,9 @@ mod boiler_implementation {
         ) -> AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
+            //  Enable clocks for capture timer
+            PinoutSpecificData::TimerCaptureBase::enable_mclk_clocks(mclk);
+
             let pwm_generator_future = PinoutSpecificData::PwmBase::new_waveform_generator(
                 input_clock_frequency,
                 Hertz::from_raw(32),
