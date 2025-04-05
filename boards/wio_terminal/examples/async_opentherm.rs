@@ -1,9 +1,7 @@
 #![no_std]
 #![no_main]
 
-//  use atsamd_hal::pac::rtc::mode0::count;
 use bsp::hal::time::Hertz;
-//  use core::marker::PhantomData;
 use core::time::Duration;
 use defmt_rtt as _;
 use hal::fugit::Hertz as FugitHertz;
@@ -692,6 +690,9 @@ async fn main(spawner: embassy_executor::Spawner) {
     //  spawner.spawn(toggle_pin_task(dev_dependency_tx_simulation_pin)).unwrap();
 
     hprintln!("main:: loop{} start:").ok();
+
+    let (mut edge_trigger_capture_dev, _) = edge_trigger_capture_dev.send_open_therm_message(
+                    OpenThermMessage::try_new_from_u32(0b0_000_0000_00000001_00100101_00000000_u32).unwrap()).await;
 
     let mut edge_trigger_capture_dev = edge_trigger_capture_dev.transition_to_capture_capable_device();
     let sender_trigger_tx_sequence = CHANNEL.sender();
