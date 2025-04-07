@@ -399,7 +399,9 @@ mod boiler_implementation {
                     .iter()
                     .zip(timestamps.iter().skip(1))
                     .map(|(a, b)| if b > a {*b - *a} else {core::time::Duration::from_micros(0)}).collect();
-                for value in differences.iter() {
+                let mut differences_reverse: Vec<Duration, N> = Vec::new();
+                for value in differences.iter().rev() {
+                    let _ = differences_reverse.push(*value);
                     hprintln!("capture timestamps: {}ns", value.as_nanos()).ok();
                 }
                 match capture_result {
