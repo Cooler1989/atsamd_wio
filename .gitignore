@@ -4,7 +4,6 @@ target
 /target
 /doc
 /doc-build
-Cargo.lock
 /.gdb_history
 **/*.iml
 **/*.idea
