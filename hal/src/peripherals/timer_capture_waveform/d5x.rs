@@ -238,7 +238,7 @@ impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHan
     }
 }
 
-pub use crate::pwm::PinoutCollapse;
+pub use crate::pwm::{PinoutCollapse, PinoutReadLevel};
 
 pub trait TimerCaptureBaseTrait {
     type TC;
@@ -270,6 +270,7 @@ pub trait TimerCaptureFutureTrait {
     //  fn start_regular_pwm(&mut self, ccx_value: u8);
     async fn start_timer_prepare_dma_transfer(&mut self, capture_memory: &mut [u32])
         -> Result<TimerCaptureResultAvailable, TimerCaptureFailure>;
+    fn read_pin_level(&mut self) -> bool; 
 }
 
 macro_rules! create_timer_capture {
@@ -397,6 +398,14 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
         let $TYPE{clock_freq, tc, pinout} = self.base_pwm;
         (self._channel, tc, pinout)
     }
+    fn read_pin_level(&mut self) -> bool {
+        //  let count = self.base_pwm.tc.count32();
+        //  let pinout = self.base_pwm.pinout;
+        //  let pin = pinout.get_pin();
+        //  let level = pin.is_high().unwrap();
+        //  level
+        self.base_pwm.read_pin_level()
+    }
     /// The capture_memorys first element will be the value of the counter at the moment of the first event. The timer starts counting from zero, which mean the first period can be assumed as the value of the first element in the memory.
     async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32])
         -> Result<TimerCaptureResultAvailable, TimerCaptureFailure> {
@@ -523,6 +532,14 @@ impl<I: PinId> $TYPE<I> {
             pinout,
         }
     }
+
+    pub fn read_pin_level(&self) -> bool {
+        //  let pinout = self.pinout;
+        //  let pin = pinout.get_pin();
+        //  let level = pin.is_high().unwrap();
+        //  level
+        self.pinout.read_level()
+    }   
 
     paste!{
         //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>

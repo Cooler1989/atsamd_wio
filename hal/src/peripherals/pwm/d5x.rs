@@ -21,6 +21,9 @@ pub trait PinoutCollapse {
 pub trait PinoutNewTrait<T: PinId> {
     fn new_pin(pin: Pin<T, Alternate<E>>) -> Self;
 }
+pub trait PinoutReadLevel {
+    fn read_level(&self) -> bool;
+}
 /// This is a major syntax hack.
 ///
 /// The previous Pinout types were enums that took specific v1::Pin types. As a
@@ -49,6 +52,13 @@ macro_rules! impl_tc_pinout {
         pub struct $Type<I: PinId> {
             _pin: Pin<I, AlternateE>,
         }
+
+        impl<I: PinId> PinoutReadLevel for $Type<I> {
+            fn read_level(&self) -> bool {
+                self._pin._is_high()
+            }
+        }
+
         impl<I: PinId> PinoutCollapse for $Type<I> {
             type PinId = I;
             fn collapse(self) -> Pin<I, AlternateE> {
