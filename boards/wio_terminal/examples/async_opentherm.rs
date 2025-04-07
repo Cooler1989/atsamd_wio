@@ -100,6 +100,7 @@ mod boiler_implementation {
     use crate::timer_data_set::PinoutSpecificDataImplTc4;
     use atsamd_hal::gpio::G;
     use atsamd_hal::gpio::{Alternate, PullUpInput, pin::AnyPin};
+    use atsamd_hal::pac::dsu::length;
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
     use atsamd_hal::pwm_wg::{PwmWgFutureTrait, PwmBaseTrait, PinoutCollapse};
@@ -325,6 +326,8 @@ mod boiler_implementation {
             period: core::time::Duration,
         ) -> (Self, Result<(), TriggerError>) {
 
+            //  Invert for hardware adapter compensation:
+            let invert_signal = true;
             //  TODO: Implement the period arg usage
             let response = match self.pwm.as_mut() {
                 Some(pwm) => {
@@ -333,9 +336,12 @@ mod boiler_implementation {
                         if idx >= N {
                             break;
                         }
+                        //  Implement conditional inversion of the signal:
+                        let value = value != invert_signal;
                         //  TODO: Implement configurable idle bus state level
                         let level = if value { 0xffu8 } else { 0x00u8 };
                         source[idx] = level;
+                        //  hprintln!("trigger::source[{}]: {}", idx, level).ok();
                     }
                     //  return:
                     //  TODO: Actually use the period to set the PWM frequency
@@ -365,14 +371,14 @@ mod boiler_implementation {
             Self,
             Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
         ) {
-            //  TODO: <declare conditions on timer to finish the capture>
-            //  1) Timeout scenario: maybe realized with 32b timer overflow. Will require to set timer overflow event to happen at around 800ms
-            //  2) Correct frame finish detection: implemented with reading the timer counter register value in a loop
-            //  The C++ driver does it by checking number of edges detected to be captured so far by polling in the elements of the DMA buffer array.
-            //  This element could be improved by reading some internal register of DMA that returns this count, as the array itself is borrowed by DMA and Rust would not allow to read it.
-            //  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
-
+            ///  TODO: <declare conditions on timer to finish the capture>
+            ///  1) Timeout scenario: maybe realized with 32b timer overflow. Will require to set timer overflow event to happen at around 800ms
+            ///  2) Correct frame finish detection: implemented with reading the timer counter register value in a loop
+            ///  The C++ driver does it by checking number of edges detected to be captured so far by polling in the elements of the DMA buffer array.
+            ///  This element could be improved by reading some internal register of DMA that returns this count, as the array itself is borrowed by DMA and Rust would not allow to read it.
+            ///  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
             let mut capture_memory: [u32; N] = [0; N];
+            let init_level = self.capture_device.as_mut().unwrap().read_pin_level();
             let result = self.capture_device
                 .as_mut()
                 .unwrap()
@@ -381,24 +387,36 @@ mod boiler_implementation {
             if let Ok(capture_result) = result {
                 let mut timestamps = Vec::<core::time::Duration, N>::new();
                 //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
-                let _ = timestamps.push(core::time::Duration::from_micros(0u64));
+                let _ = timestamps.push(core::time::Duration::from_nanos(0u64));
                 for value in capture_memory.iter() {
                     //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
                     if *value > 0 {
-                        let _ = timestamps.push(core::time::Duration::from_micros(*value as u64));
+                        let _ = timestamps.push(core::time::Duration::from_nanos(*value as u64));
                     }
+                }
+                let differences: Vec<core::time::Duration, N> = timestamps
+                    .iter()
+                    .zip(timestamps.iter().skip(1))
+                    .map(|(a, b)| if b > a {*b - *a} else {core::time::Duration::from_micros(0)}).collect();
+                for value in differences.iter() {
+                    hprintln!("capture timestamps: {}ns", value.as_nanos()).ok();
                 }
                 match capture_result {
                     TimerCaptureResultAvailable::DmaPollReady(timer_value_at_termination) => {
                         let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
-                        hprintln!("TimerCaptureResultAvailable::DmaPollReady: {}", timer_value_at_termination.get_raw_value()).ok();
+                        hprintln!("TimerCaptureResultAvailable::DmaPollReady: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
                     }
                     TimerCaptureResultAvailable::TimerTimeout(timer_value_at_termination) => {
                         let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
-                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: {}", timer_value_at_termination.get_raw_value()).ok();
+                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
                     }
                 }
-                (self, Ok((InitLevel::High, timestamps)))
+                //  First period is skipped so, we start off with the second period and thus oposite level:
+                let level = match init_level {
+                    true => InitLevel::Low,
+                    false => InitLevel::High,
+                };
+                (self, Ok((level, differences)))
             }
             else {
                 return (self, Err(CaptureError::GenericError));
@@ -497,15 +515,6 @@ mod boiler_implementation {
 
     //  impl EdgeCaptureInterface for OpenThermTransitiveBus {
 }
-
-//  dev1 : EdgeTriggerTransitive : EdgeTriggerInterface
-//  dev2 : EdgeCaptureTransitive : EdgeCaptureInterface
-
-//  impl OpenThermEdgeTriggerBus for AtsamdEdgeTriggerCaptureRuntime<'_, VEC_SIZE_CAPTURE>
-//  {
-//  }
-
-//  }
 
 #[inline]
 pub fn check_and_clear_interrupts(flags: InterruptFlags) -> InterruptFlags {
@@ -613,17 +622,6 @@ async fn main(spawner: embassy_executor::Spawner) {
     let mut channel1 = channels.1.init(PriorityLevel::Lvl0);
 
     let tc2_timer = peripherals.tc2;
-
-    //  #[cfg(feature = "use_opentherm")]
-    //  let mut simulator_edge_trigger_capture_dev =
-    //      boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
-    //          dev_dependency_tx_simulation_pin,
-    //          dev_dependency_rx_simulation_pin,
-    //          tc2_timer,
-    //          &mut peripherals.mclk,
-    //          &clocks.tc2_tc3(&gclk0).unwrap(),
-    //          channel0,
-    //      );
 
     //  #[cfg(feature = "use_opentherm")]
     //  spawner.spawn(full_boiler_opentherm_simulation(dev_dependency_tx_simulation_pin,
