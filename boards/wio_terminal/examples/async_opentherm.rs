@@ -391,7 +391,8 @@ mod boiler_implementation {
                 for value in capture_memory.iter() {
                     //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
                     if *value > 0 {
-                        let _ = timestamps.push(core::time::Duration::from_nanos(*value as u64));
+                        let ration_adjusted = (*value as u64 * 4173) / 1000;  //  TODO: fix this by some ration compund type
+                        let _ = timestamps.push(core::time::Duration::from_nanos(ration_adjusted));
                     }
                 }
                 let differences: Vec<core::time::Duration, N> = timestamps
