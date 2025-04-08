@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/Cooler1989/atsamd_wio/compare/wio_terminal-0.7.2...wio_terminal-0.7.3) - 2025-04-08
+
+### Other
+
+- Update heapless to match seeed-erpc, fixes build failure
+
 ## [0.7.2](https://github.com/atsamd-rs/atsamd/compare/wio_terminal-0.7.1...wio_terminal-0.7.2) - 2025-01-20
 
 ### Fixed
