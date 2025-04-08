@@ -118,9 +118,9 @@ where
         //  First time the future is polled, it sets enable bit of DMA. Only after that the timer shall be started.
         let result = this._dma_future.poll(cx);
         if result == core::task::Poll::Ready(Ok(())) {
+            let counter_value = this._timer.counter_value();
             this._timer.stop();
             this._timer.disable_interrupt();
-            let counter_value = this._timer.counter_value();
             //  TODO: add check on the mc1 flag related to timeout
             return core::task::Poll::Ready(Ok(TimerCaptureResultAvailable::DmaPollReady(CounterValueAtTermination(counter_value))));
         }
@@ -139,9 +139,9 @@ where
         let result = if
             MC1_INTERRUPT_FIRED[*this.tc_waker_index].load(atomic::Ordering::Relaxed) {
             //  counter_value
+            let counter_value = this._timer.counter_value();
             this._timer.stop();
             this._timer.disable_interrupt();
-            let counter_value = this._timer.counter_value();
             core::task::Poll::Ready(Ok(TimerCaptureResultAvailable::TimerTimeout(CounterValueAtTermination(counter_value))))
         } else {
             use waker::WAKERS;
@@ -518,6 +518,9 @@ impl<I: PinId> $TYPE<I> {
         count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
         // enable interrupt on the timeout side channel:
         count.intenset().modify(|_, w| w.mc1().set_bit() );
+
+        //  To enable the capture on both edges of the channel 0, the caputre channel
+        count.drvctrl().write(|w| w.inven0().set_bit());
 
         //  count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
         //  count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
