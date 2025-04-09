@@ -126,7 +126,6 @@ where
         }
 
         if *this.timer_started == false {
-            //  let result = this._dma_future.poll(cx);
             *this.timer_started = true;
             MC1_INTERRUPT_FIRED[*this.tc_waker_index].store(false, atomic::Ordering::Relaxed);
             //  TODO: Enable interrupts of the timer
@@ -270,7 +269,7 @@ pub trait TimerCaptureFutureTrait {
     //  fn start_regular_pwm(&mut self, ccx_value: u8);
     async fn start_timer_prepare_dma_transfer(&mut self, capture_memory: &mut [u32])
         -> Result<TimerCaptureResultAvailable, TimerCaptureFailure>;
-    fn read_pin_level(&mut self) -> bool; 
+    fn read_pin_level(&mut self) -> bool;
 }
 
 macro_rules! create_timer_capture {
@@ -542,7 +541,7 @@ impl<I: PinId> $TYPE<I> {
         //  let level = pin.is_high().unwrap();
         //  level
         self.pinout.read_level()
-    }   
+    }
 
     paste!{
         //  pub fn with_dma_channels<R, T>(self, rx: R, tx: T) -> Spi<C, D, R, T>
