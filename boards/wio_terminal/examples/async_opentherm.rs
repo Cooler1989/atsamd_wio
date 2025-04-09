@@ -388,11 +388,12 @@ mod boiler_implementation {
                 let mut timestamps = Vec::<core::time::Duration, N>::new();
                 //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
                 let _ = timestamps.push(core::time::Duration::from_nanos(0u64));
-                for value in capture_memory.iter() {
+                for (idx, value) in capture_memory.iter().enumerate() {
                     //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
+                    //  hprintln!("memory captured[{}] = {}", idx, *value).ok();
                     if *value > 0 {
-                        let ration_adjusted = (*value as u64 * 4173) / 1000;  //  TODO: fix this by some ration compund type
-                        let _ = timestamps.push(core::time::Duration::from_nanos(ration_adjusted));
+                        let ratio_adjusted = (*value as u64 * 4173) / 1000;  //  TODO: fix this by some ration compund type
+                        let _ = timestamps.push(core::time::Duration::from_nanos(ratio_adjusted));
                     }
                 }
                 let differences: Vec<core::time::Duration, N> = timestamps
@@ -402,8 +403,9 @@ mod boiler_implementation {
                 let mut differences_reverse: Vec<Duration, N> = Vec::new();
                 for value in differences.iter().rev() {
                     let _ = differences_reverse.push(*value);
-                    hprintln!("capture timestamps: {}ns", value.as_nanos()).ok();
+                    hprintln!("timestamps difference: {}ns", value.as_nanos()).ok();
                 }
+                let differences_reverse = differences_reverse;
                 match capture_result {
                     TimerCaptureResultAvailable::DmaPollReady(timer_value_at_termination) => {
                         let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
@@ -419,7 +421,7 @@ mod boiler_implementation {
                     true => InitLevel::Low,
                     false => InitLevel::High,
                 };
-                (self, Ok((level, differences)))
+                (self, Ok((level, differences_reverse)))
             }
             else {
                 return (self, Err(CaptureError::GenericError));
