@@ -52,7 +52,7 @@ rtic_monotonics::systick_monotonic!(Mono, 10000);
 #[cfg(feature = "use_opentherm")]
 use boiler::opentherm_interface::{
     edge_trigger_capture_interface::{
-        CaptureError, EdgeCaptureInterface, EdgeCaptureTransitiveToTriggerCapable,
+        CaptureError, EdgeCaptureInterface, EdgeCaptureTransitiveToTriggerCapable, CaptureTypeEdges,
         EdgeTriggerInterface, EdgeTriggerTransitiveToCaptureCapable, InitLevel, TriggerError,
     },
     open_therm_message::{CHState, Temperature, OpenThermMessage},
@@ -369,7 +369,7 @@ mod boiler_implementation {
             timeout_till_active_capture: core::time::Duration,
         ) -> (
             Self,
-            Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
+            Result<(InitLevel, Vec<core::time::Duration, N>, CaptureTypeEdges), CaptureError>,
         ) {
             ///  TODO: <declare conditions on timer to finish the capture>
             ///  1) Timeout scenario: maybe realized with 32b timer overflow. Will require to set timer overflow event to happen at around 800ms
@@ -421,7 +421,7 @@ mod boiler_implementation {
                     true => InitLevel::Low,
                     false => InitLevel::High,
                 };
-                (self, Ok((level, differences_reverse)))
+                (self, Ok((level, differences_reverse, CaptureTypeEdges::BothEdges)))
             }
             else {
                 return (self, Err(CaptureError::GenericError));
