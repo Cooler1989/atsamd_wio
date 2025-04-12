@@ -518,8 +518,8 @@ impl<I: PinId> $TYPE<I> {
         // enable interrupt on the timeout side channel:
         count.intenset().modify(|_, w| w.mc1().set_bit() );
 
-        //  To enable the capture on both edges of the channel 0, the caputre channel
-        count.drvctrl().write(|w| w.inven0().set_bit());
+        //  It is possible to set capture on falling edges by setting the INVEN bit.
+        // count.drvctrl().write(|w| w.inven0().set_bit());
 
         //  count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
         //  count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
