@@ -52,7 +52,7 @@ rtic_monotonics::systick_monotonic!(Mono, 10000);
 #[cfg(feature = "use_opentherm")]
 use boiler::opentherm_interface::{
     edge_trigger_capture_interface::{
-        CaptureError, EdgeCaptureInterface, EdgeCaptureTransitiveToTriggerCapable,
+        CaptureError, EdgeCaptureInterface, EdgeCaptureTransitiveToTriggerCapable, CapturedEdgePeriod,
         EdgeTriggerInterface, EdgeTriggerTransitiveToCaptureCapable, InitLevel, TriggerError,
     },
     open_therm_message::{CHState, Temperature, OpenThermMessage},
@@ -115,7 +115,7 @@ mod boiler_implementation {
 
     }
 
-    const VEC_SIZE_CAPTURE: usize = 128;
+    pub(super) const VEC_SIZE_CAPTURE: usize = 128;
 
     pub(super) trait CreatePwmPinout {
         type PinTxId: PinId;
@@ -359,18 +359,16 @@ mod boiler_implementation {
         }
     }
 
-    impl<PinoutSpecificData, const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCapture<PinoutSpecificData, OtRx, N>
+    impl<PinoutSpecificData, const N: usize> EdgeCaptureInterface for AtsamdEdgeTriggerCapture<PinoutSpecificData, OtRx, N>
     where
         PinoutSpecificData: CreatePwmPinout,
     {
-        async fn start_capture(
+        async fn start_capture<OutputType: IntoIterator<Item=CapturedEdgePeriod> + Extend<CapturedEdgePeriod>>(
             mut self,
-            timeout_inactive_capture: core::time::Duration,
-            timeout_till_active_capture: core::time::Duration,
-        ) -> (
-            Self,
-            Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
-        ) {
+            mut container: OutputType,  // fills the container with captured edges or drops it in case of error
+            timeout_inactive_capture: Duration,
+            timeout_till_active_capture: Duration,
+        ) -> (Self, Result<OutputType, CaptureError>) {
             ///  TODO: <declare conditions on timer to finish the capture>
             ///  1) Timeout scenario: maybe realized with 32b timer overflow. Will require to set timer overflow event to happen at around 800ms
             ///  2) Correct frame finish detection: implemented with reading the timer counter register value in a loop
@@ -421,7 +419,8 @@ mod boiler_implementation {
                     true => InitLevel::Low,
                     false => InitLevel::High,
                 };
-                (self, Ok((level, differences_reverse)))
+                container.extend(differences_reverse.iter().map(|v| CapturedEdgePeriod::FallingToFalling(*v)));
+                (self, Ok(container))
             }
             else {
                 return (self, Err(CaptureError::GenericError));
@@ -662,7 +661,7 @@ async fn main(spawner: embassy_executor::Spawner) {
 
     #[cfg(feature = "use_opentherm")]
     let mut edge_trigger_capture_dev =
-        boiler_implementation::AtsamdEdgeTriggerCapture::new_with_default(
+        boiler_implementation::AtsamdEdgeTriggerCapture::<_, _, {boiler_implementation::VEC_SIZE_CAPTURE}>::new_with_default(
             pwm_tx_pin,
             pwm_rx_pin,
             tc4_timer,
