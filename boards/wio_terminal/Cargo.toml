@@ -50,7 +50,7 @@ embassy-executor = { version = "0.6.2", features = [
 rtic-monotonics = { version = "2.0.1", features = ["cortex-m-systick"] }
 
 # Opentherm project specific dependnecies:
-opentherm_boiler_controller_lib = { version = "0.1.0", git = "ssh://cooler1989@bitbucket.org/learn-rust/boiler_controller_ot_lib.git", branch = "passing_owned_drivers_instead_references", features = [
+opentherm_boiler_controller_lib = { version = "0.1.0", git = "ssh://cooler1989@bitbucket.org/learn-rust/boiler_controller_ot_lib.git", branch = "passing_around_slices_instead_of_iterators", features = [
 # opentherm_boiler_controller_lib = { version = "0.1.0", path = "/home/cooler1989/projects/rusty_boiler/boiler_controller_ot_lib", features = [
 # opentherm_boiler_controller_lib = { version = "0.1.0", path = "/home/ubuntu/projects/rusty_boiler/boiler_controller_ot_lib", features = [
 ], optional = true }
