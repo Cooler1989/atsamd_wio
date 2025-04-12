@@ -368,7 +368,7 @@ mod boiler_implementation {
             mut container: OutputType,  // fills the container with captured edges or drops it in case of error
             timeout_inactive_capture: Duration,
             timeout_till_active_capture: Duration,
-        ) -> (Self, Result<OutputType, CaptureError>) {
+        ) -> (Self, Result<(OutputType, CaptureTypeEdges), CaptureError>) {
             ///  TODO: <declare conditions on timer to finish the capture>
             ///  1) Timeout scenario: maybe realized with 32b timer overflow. Will require to set timer overflow event to happen at around 800ms
             ///  2) Correct frame finish detection: implemented with reading the timer counter register value in a loop
@@ -420,7 +420,7 @@ mod boiler_implementation {
                     false => InitLevel::High,
                 };
                 container.extend(differences_reverse.iter().map(|v| CapturedEdgePeriod::FallingToFalling(*v)));
-                (self, Ok(container), CaptureTypeEdges::RisingEdges)
+                (self, Ok((container, CaptureTypeEdges::RisingEdge)))
             }
             else {
                 return (self, Err(CaptureError::GenericError));

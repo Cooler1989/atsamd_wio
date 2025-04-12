@@ -1146,7 +1146,7 @@ checksum = "1f878075b9794c1e4ac788c95b728f26aa6366d32eeb10c7051389f898f7d067"
 [[package]]
 name = "embassy-futures"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/embassy#b1179c5090a945d8b15919c99144f157e11d4654"
+source = "git+https://github.com/embassy-rs/embassy#659c616f9f13aa6f157eaef5279f09805449b5be"
 
 [[package]]
 name = "embassy-sync"
@@ -2061,7 +2061,7 @@ dependencies = [
 [[package]]
 name = "opentherm_interface"
 version = "0.1.0"
-source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#e51939683cfb15872d78ab09fe15090a3aeb8522"
+source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#ab49b78cfce14952b8f932ed2e5caaeeb1dcd04f"
 dependencies = [
  "heapless 0.8.0",
  "log",
