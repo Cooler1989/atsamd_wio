@@ -381,29 +381,41 @@ mod boiler_implementation {
                 .as_mut()
                 .unwrap()
                 .start_timer_prepare_dma_transfer(&mut capture_memory).await;
-                //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
+            let adjust_time = |x| {
+                let adjust_to_duration = (x as u64 * 4173*2) / 1000;  //  TODO: fix this by some ration compund type
+                core::time::Duration::from_nanos(adjust_to_duration)
+            };
             if let Ok(capture_result) = result {
                 let mut timestamps = Vec::<core::time::Duration, N>::new();
                 //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
-                let _ = timestamps.push(core::time::Duration::from_nanos(0u64));
+                //  let _ = timestamps.push(core::time::Duration::from_nanos(0u64));
+                if capture_memory[0] > 0 {
+                    container.extend(core::iter::once(CapturedEdgePeriod::StartToFirstRising(adjust_time(capture_memory[0]))));
+                }
+                else {
+                    hprintln!("capture_memory[0] = {}", capture_memory[0]).ok();
+                    return (self, Err(CaptureError::GenericError));  //  Add more error options
+                }
                 for (idx, value) in capture_memory.iter().enumerate() {
                     //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
                     //  hprintln!("memory captured[{}] = {}", idx, *value).ok();
                     if *value > 0 {
-                        let ratio_adjusted = (*value as u64 * 4173) / 1000;  //  TODO: fix this by some ration compund type
-                        let _ = timestamps.push(core::time::Duration::from_nanos(ratio_adjusted));
+                        let _ = timestamps.push(adjust_time(*value));
                     }
                 }
                 let differences: Vec<core::time::Duration, N> = timestamps
                     .iter()
                     .zip(timestamps.iter().skip(1))
                     .map(|(a, b)| if b > a {*b - *a} else {core::time::Duration::from_micros(0)}).collect();
-                let mut differences_reverse: Vec<Duration, N> = Vec::new();
-                for value in differences.iter().rev() {
-                    let _ = differences_reverse.push(*value);
-                    hprintln!("timestamps difference: {}ns", value.as_nanos()).ok();
-                }
-                let differences_reverse = differences_reverse;
+                //  let mut differences_reverse: Vec<Duration, N> = Vec::new();
+                //  for value in differences.iter().rev() {
+                //      let _ = differences_reverse.push(*value);
+                //      hprintln!("timestamps difference: {}ns", value.as_nanos()).ok();
+                //  }
+                let final_differences = differences;
+                //  for value in final_differences.iter() {
+                //      hprintln!("timestamps difference: {}ns", value.as_nanos()).ok();
+                //  }
                 match capture_result {
                     TimerCaptureResultAvailable::DmaPollReady(timer_value_at_termination) => {
                         let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
@@ -414,12 +426,7 @@ mod boiler_implementation {
                         hprintln!("TimerCaptureResultAvailable::TimerTimeout: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
                     }
                 }
-                //  First period is skipped so, we start off with the second period and thus oposite level:
-                let level = match init_level {
-                    true => InitLevel::Low,
-                    false => InitLevel::High,
-                };
-                container.extend(differences_reverse.iter().map(|v| CapturedEdgePeriod::FallingToFalling(*v)));
+                container.extend(final_differences.iter().map(|v| CapturedEdgePeriod::RisingToRising(*v)));
                 (self, Ok((container, CaptureTypeEdges::RisingEdge)))
             }
             else {

@@ -2061,7 +2061,7 @@ dependencies = [
 [[package]]
 name = "opentherm_interface"
 version = "0.1.0"
-source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#ab49b78cfce14952b8f932ed2e5caaeeb1dcd04f"
+source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#ef88f4daa10987496db2c3c1b287eda2324cbe9e"
 dependencies = [
  "heapless 0.8.0",
  "log",
