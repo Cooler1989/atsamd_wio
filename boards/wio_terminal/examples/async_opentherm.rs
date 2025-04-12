@@ -52,7 +52,7 @@ rtic_monotonics::systick_monotonic!(Mono, 10000);
 #[cfg(feature = "use_opentherm")]
 use boiler::opentherm_interface::{
     edge_trigger_capture_interface::{
-        CaptureError, EdgeCaptureInterface, EdgeCaptureTransitiveToTriggerCapable, CapturedEdgePeriod,
+        CaptureError, EdgeCaptureInterface, EdgeCaptureTransitiveToTriggerCapable, CapturedEdgePeriod, CaptureTypeEdges,
         EdgeTriggerInterface, EdgeTriggerTransitiveToCaptureCapable, InitLevel, TriggerError,
     },
     open_therm_message::{CHState, Temperature, OpenThermMessage},
@@ -420,7 +420,7 @@ mod boiler_implementation {
                     false => InitLevel::High,
                 };
                 container.extend(differences_reverse.iter().map(|v| CapturedEdgePeriod::FallingToFalling(*v)));
-                (self, Ok(container))
+                (self, Ok(container), CaptureTypeEdges::RisingEdges)
             }
             else {
                 return (self, Err(CaptureError::GenericError));
