@@ -333,6 +333,9 @@ mod boiler_implementation {
                 Some(pwm) => {
                     let mut source: [u8; N] = [self.tx_init_duty_value; N];
                     for (idx, value) in iterator.enumerate() {
+                        //  TODO: move it to the right because for a reason it is not visisble on the wire
+                        //  plus resolve the initial driver state. Before the first TX it is low instead of high.
+                        let idx = idx + 2;
                         if idx >= N {
                             break;
                         }
