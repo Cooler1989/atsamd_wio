@@ -2,6 +2,7 @@
 
 use core::future::Future;
 use core::sync::atomic;
+use core::iter;
 
 use atsamd_hal_macros::hal_cfg;
 
@@ -13,7 +14,6 @@ use crate::clock;
 use crate::dmac::ReadyFuture;
 use crate::dmac::{AnyChannel, Beat, Buffer, Error as DmacError, TriggerAction, TriggerSource};
 use crate::gpio::*;
-use crate::gpio::{AlternateE, AnyPin, Pin};
 use crate::pac::Mclk;
 use crate::time::Hertz;
 use crate::timer_params::TimerParams;
@@ -82,9 +82,133 @@ impl CounterValueAtTermination {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimerCaptureResultAvailable {
-    DmaPollReady(CounterValueAtTermination),
-    TimerTimeout(CounterValueAtTermination),
+pub struct TimerCaptureData<Container: iter::Extend<core::time::Duration>> {
+    data: Container,
+}
+
+impl<Container> TimerCaptureData<Container> 
+where
+    Container: iter::Extend<core::time::Duration>
+{
+    pub fn get_data(self) -> Container {
+        self.data
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimerCaptureResultAvailable<Container: iter::Extend<core::time::Duration>> {
+    DmaPollReady(TimerCaptureData<Container>),
+    TimerTimeout(TimerCaptureData<Container>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExtendWithFirstZeroAndTerminationValueIterator<'a>{
+    data: &'a [u32],
+    first_done: bool,
+    depleted: bool,
+    last_value: CounterValueAtTermination,
+}
+
+impl<'a> ExtendWithFirstZeroAndTerminationValueIterator<'a> {
+    fn new(data: &'a [u32], counter_at_termination: CounterValueAtTermination) -> Self {
+        Self { data, first_done: false, depleted: false, last_value: counter_at_termination }
+    }
+}
+
+//  And only non-zero values are returned. Otherwise the iterator will return `None`
+impl<'a> iter::Iterator for ExtendWithFirstZeroAndTerminationValueIterator<'a> {
+    type Item = u32;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.data.len() == 0 {
+            if (self.depleted == false) {
+                self.depleted = true;
+                if let CounterValueAtTermination(value) = self.last_value {
+                    return Some(value);
+                } else {
+                    panic!("Invalid value of the counter at termination");
+                }
+            }
+            return None;
+        }
+        if self.first_done == false {
+            self.first_done = true;
+            return Some(0u32);
+        }
+        if self.depleted == true {
+            return None;
+        }
+
+        let value = self.data[0];
+        self.data = &self.data[1..];
+        if value == 0 {
+            self.depleted = true;
+            return None;
+        }
+        Some(value)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct TimerCaptureRawData<'a> {
+    counter_at_termination: CounterValueAtTermination,
+    data: Option<&'a mut [u32]>,
+}
+// TODO: DmaPollReady and TimerTimeout should be merged into one trait / type to avoid processing code duplication:
+#[derive(Debug, PartialEq, Eq)]
+pub enum TimerCaptureRawResultAvailable<'a> {
+    DmaPollReady(TimerCaptureRawData<'a>),  
+    TimerTimeout(TimerCaptureRawData<'a>),
+}
+
+impl<'a> AsMut<TimerCaptureRawData<'a>> for TimerCaptureRawResultAvailable<'a> {
+    fn as_mut(&mut self) -> &mut TimerCaptureRawData<'a> {
+        match self {
+            TimerCaptureRawResultAvailable::DmaPollReady(data) => data,
+            TimerCaptureRawResultAvailable::TimerTimeout(data) => data,
+        }
+    }
+}
+
+impl<'a> TimerCaptureRawResultAvailable<'a> {
+    pub fn get_public_data<Container: iter::Extend<core::time::Duration>>(self, mut container: Container) -> TimerCaptureResultAvailable<Container> {
+        let adjust_ratio = |x| {(x as u64 * 4173) / 1000};  //  TODO: fix this by some ratio compund type
+
+        match self {
+            TimerCaptureRawResultAvailable::DmaPollReady(data) => {
+                todo!()
+            }
+            TimerCaptureRawResultAvailable::TimerTimeout(data) => {
+                let counter_value_at_termination = data.counter_at_termination;
+                if let Some(data) = data.data {
+                    //  container.extend(data.iter().map(|x| core::time::Duration::from_nanos(adjust_ratio(*x as u64))));
+                    let data_with_preceeding_zero = ExtendWithFirstZeroAndTerminationValueIterator::new(data, counter_value_at_termination);
+                    container.extend(data_with_preceeding_zero.clone().
+                        zip(data_with_preceeding_zero.skip(1)).
+                        map(|(x, y)|{ 
+                            if y > x { 
+                                core::time::Duration::from_nanos(adjust_ratio(y as u64 - x as u64))
+                            } else {
+                                //  TODO: Better handling for errror here:
+                                todo!()
+                            }
+                        }
+                    ));
+                    //  TODO: do the conversion here:
+                    container.extend(data.iter().map(|x| core::time::Duration::from_nanos(adjust_ratio(*x as u64))));
+                    TimerCaptureResultAvailable::TimerTimeout(TimerCaptureData {
+                        data: container,
+                    })
+                }
+                else {todo!()}
+            }
+        }
+    }
+    pub fn fill_the_capture_memory<'b>(&mut self, capture_memory: &'b mut [u32]) 
+    where 
+        'b: 'a,
+    {
+        self.as_mut().data = Some(capture_memory);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +219,12 @@ pub enum TimerCaptureFailure {
 
 impl<'a, DmaFut, T> TimerCaptureDmaWrapper<'a, DmaFut, T> {
     fn new(dma_future: DmaFut, timer: &'a T, tc_index: usize) -> Self {
-        Self { _dma_future: dma_future, timer_started: false, tc_waker_index:tc_index, _timer: timer }
+        Self { 
+            _dma_future: dma_future, 
+            timer_started: false, 
+            tc_waker_index:tc_index, 
+            _timer: timer,
+         }
     }
 }
 
@@ -104,7 +233,7 @@ where
     DmaFut: core::future::Future<Output = Result<(), DmacError>>,
     T: TimerCounterStart,
 {
-    type Output = Result<TimerCaptureResultAvailable, TimerCaptureFailure>;
+    type Output = Result<TimerCaptureRawResultAvailable<'a>, TimerCaptureFailure>;
 
     fn poll(
         mut self: core::pin::Pin<&mut Self>,
@@ -121,8 +250,12 @@ where
             let counter_value = this._timer.counter_value();
             this._timer.stop();
             this._timer.disable_interrupt();
+            let raw_result = TimerCaptureRawData {
+                counter_at_termination: CounterValueAtTermination(counter_value),
+                data: None,
+            };
             //  TODO: add check on the mc1 flag related to timeout
-            return core::task::Poll::Ready(Ok(TimerCaptureResultAvailable::DmaPollReady(CounterValueAtTermination(counter_value))));
+            return core::task::Poll::Ready(Ok(TimerCaptureRawResultAvailable::DmaPollReady(raw_result)));
         }
 
         if *this.timer_started == false {
@@ -141,7 +274,11 @@ where
             let counter_value = this._timer.counter_value();
             this._timer.stop();
             this._timer.disable_interrupt();
-            core::task::Poll::Ready(Ok(TimerCaptureResultAvailable::TimerTimeout(CounterValueAtTermination(counter_value))))
+            let raw_result = TimerCaptureRawData {
+                counter_at_termination: CounterValueAtTermination(counter_value),
+                data: None,
+            };
+            core::task::Poll::Ready(Ok(TimerCaptureRawResultAvailable::TimerTimeout(raw_result)))
         } else {
             use waker::WAKERS;
             //  TODO: Do I have to disable interrupt/ put registartion into critical section?
@@ -267,8 +404,8 @@ pub trait TimerCaptureFutureTrait {
     type Pinout: PinoutCollapse;
     fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
     //  fn start_regular_pwm(&mut self, ccx_value: u8);
-    async fn start_timer_prepare_dma_transfer(&mut self, capture_memory: &mut [u32])
-        -> Result<TimerCaptureResultAvailable, TimerCaptureFailure>;
+    async fn start_timer_execute_dma_transfer<Container: iter::Extend<core::time::Duration>, const N: usize>(&mut self, timestamps_capture: Container)
+        -> Result<TimerCaptureResultAvailable<Container>, TimerCaptureFailure>;
     fn read_pin_level(&mut self) -> bool;
 }
 
@@ -406,17 +543,20 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
         self.base_pwm.read_pin_level()
     }
     /// The capture_memorys first element will be the value of the counter at the moment of the first event. The timer starts counting from zero, which mean the first period can be assumed as the value of the first element in the memory.
-    async fn start_timer_prepare_dma_transfer(&mut self, mut capture_memory: &mut [u32])
-        -> Result<TimerCaptureResultAvailable, TimerCaptureFailure> {
+    async fn start_timer_execute_dma_transfer<ContainerData: core::iter::Extend<core::time::Duration>, const N: usize>
+        (&mut self, mut capture_container: ContainerData)
+            -> Result<TimerCaptureResultAvailable<ContainerData>, TimerCaptureFailure> {
 
         let count = self.base_pwm.tc.count32();
 
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
 
+        let mut capture_memory: [u32; N] = [0; N];
+        // TODO:  core::pin::pin_mut!(capture_memory);
         //  TODO: make transfer_future method to return real number of transferred items
         let dma_future = self._channel.as_mut().transfer_future(
             pwm_dma_address,
-            capture_memory,
+            &mut capture_memory,
             TriggerSource::$event,
             TriggerAction::Burst,
         );
@@ -430,6 +570,14 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
          let result = dma_wrapped_future.await;
         //  Right after the DMA transfer is started, we can start the timer.
 
+        if let Ok(mut result) = result {
+            result.fill_the_capture_memory(&mut capture_memory);
+            Ok(result.get_public_data(capture_container))
+        }else {
+            //  Err(TimerCaptureFailure::DmaFailed(DmacError::TransferError))
+            todo!()
+        }
+        //  type Output = Result<TimerCaptureResultAvailable<ContainerData>, TimerCaptureFailure>;
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
         //  of the timer.
         //  self.start_capture_timer();
@@ -438,7 +586,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
 
         // wait for the settings to be applied
         //  while count.syncbusy().read().cc0().bit_is_set() {}
-        result
+        //  result
     }
 
 }
@@ -615,9 +763,7 @@ impl<I: PinId> TimerCounterStart for $TYPE<I> {
     }
     fn disable_interrupt(&self)
     {
-        unsafe {
-            Self::Interrupt::disable();
-        }
+        Self::Interrupt::disable();
     }
     fn counter_value(&self) -> u32
     {

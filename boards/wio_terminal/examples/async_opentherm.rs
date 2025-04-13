@@ -104,7 +104,7 @@ mod boiler_implementation {
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
     use atsamd_hal::pwm_wg::{PwmWgFutureTrait, PwmBaseTrait, PinoutCollapse};
-    use atsamd_hal::timer_capture_waveform::TimerCaptureFutureTrait;
+    use atsamd_hal::timer_capture_waveform::{self, TimerCaptureData, TimerCaptureFutureTrait};
     use fugit::MicrosDuration;
     use core::any::Any;
     use core::marker::PhantomData;
@@ -378,59 +378,69 @@ mod boiler_implementation {
             ///  The C++ driver does it by checking number of edges detected to be captured so far by polling in the elements of the DMA buffer array.
             ///  This element could be improved by reading some internal register of DMA that returns this count, as the array itself is borrowed by DMA and Rust would not allow to read it.
             ///  In C++ idle bus time is based on the above mentioned edge count by using the independent system timestamp capure mechanism. Maybe that can be improved as well.
-            let mut capture_memory: [u32; N] = [0; N];
+            //  let mut capture_memory: [u32; N] = [0; N];
+            let mut data_container: Vec<core::time::Duration, N> = Vec::new();
             let init_level = self.capture_device.as_mut().unwrap().read_pin_level();
             let result = self.capture_device
                 .as_mut()
                 .unwrap()
-                .start_timer_prepare_dma_transfer(&mut capture_memory).await;
-            let adjust_time = |x| {
-                let adjust_to_duration = (x as u64 * 4173*2) / 1000;  //  TODO: fix this by some ration compund type
-                core::time::Duration::from_nanos(adjust_to_duration)
-            };
+                .start_timer_execute_dma_transfer::<_, N>(data_container).await;
+                //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
             if let Ok(capture_result) = result {
-                let mut timestamps = Vec::<core::time::Duration, N>::new();
-                //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
+
+                //  let mut timestamps = Vec::<core::time::Duration, N>::new();
+                //  //  The start of the timer is assumed at counter value equal to zero so the lenght can be set to 0ms of relative capture time.
                 //  let _ = timestamps.push(core::time::Duration::from_nanos(0u64));
-                if capture_memory[0] > 0 {
-                    container.extend(core::iter::once(CapturedEdgePeriod::StartToFirstRising(adjust_time(capture_memory[0]))));
-                }
-                else {
-                    hprintln!("capture_memory[0] = {}", capture_memory[0]).ok();
-                    return (self, Err(CaptureError::GenericError));  //  Add more error options
-                }
-                for (idx, value) in capture_memory.iter().enumerate() {
-                    //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
-                    //  hprintln!("memory captured[{}] = {}", idx, *value).ok();
-                    if *value > 0 {
-                        let _ = timestamps.push(adjust_time(*value));
-                    }
-                }
-                let differences: Vec<core::time::Duration, N> = timestamps
-                    .iter()
-                    .zip(timestamps.iter().skip(1))
-                    .map(|(a, b)| if b > a {*b - *a} else {core::time::Duration::from_micros(0)}).collect();
+                //  for (idx, value) in capture_memory.iter().enumerate() {
+                //      //  TODO: Fix by using the dma transfer coun instead of using non-zero values condition
+                //      //  hprintln!("memory captured[{}] = {}", idx, *value).ok();
+                //      if *value > 0 {
+                //          let ratio_adjusted = (*value as u64 * 4173) / 1000;  //  TODO: fix this by some ration compund type
+                //          let _ = timestamps.push(core::time::Duration::from_nanos(ratio_adjusted));
+                //      }
+                //  }
+                //  let differences: Vec<core::time::Duration, N> = timestamps
+                //      .iter()
+                //      .zip(timestamps.iter().skip(1))
+                //      .map(|(a, b)| if b > a {*b - *a} else {core::time::Duration::from_micros(0)}).collect();
                 //  let mut differences_reverse: Vec<Duration, N> = Vec::new();
                 //  for value in differences.iter().rev() {
                 //      let _ = differences_reverse.push(*value);
                 //      hprintln!("timestamps difference: {}ns", value.as_nanos()).ok();
                 //  }
-                let final_differences = differences;
-                //  for value in final_differences.iter() {
-                //      hprintln!("timestamps difference: {}ns", value.as_nanos()).ok();
+                //  let differences_reverse = differences_reverse;
+                //  match capture_result {
+                //      TimerCaptureResultAvailable::DmaPollReady(timer_value_at_termination) => {
+                //          let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
+                //          hprintln!("TimerCaptureResultAvailable::DmaPollReady: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
+                //      }
+                //      TimerCaptureResultAvailable::TimerTimeout(timer_value_at_termination) => {
+                //          let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
+                //          hprintln!("TimerCaptureResultAvailable::TimerTimeout: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
+                //      }
                 //  }
+                //  //  First period is skipped so, we start off with the second period and thus oposite level:
+                //  let level = match init_level {
+                //      true => InitLevel::Low,
+                //      false => InitLevel::High,
+                //  };
+                //  container.extend(differences_reverse.iter().map(|v| CapturedEdgePeriod::FallingToFalling(*v)));
+                //  (self, Ok((container, CaptureTypeEdges::RisingEdge)))
+
                 match capture_result {
-                    TimerCaptureResultAvailable::DmaPollReady(timer_value_at_termination) => {
-                        let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
-                        hprintln!("TimerCaptureResultAvailable::DmaPollReady: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
+                    TimerCaptureResultAvailable::DmaPollReady(timer_capture_data) => {
+                        let timestamps = timer_capture_data.get_data();
+                        container.extend(timestamps.iter().map(|v| CapturedEdgePeriod::RisingToRising(*v)));
+                        hprintln!("TimerCaptureResultAvailable::DmaPollReady: {:?}, N={}", timestamps, timestamps.len()).ok();
+                        (self, Ok((container, CaptureTypeEdges::RisingEdge)))
                     }
-                    TimerCaptureResultAvailable::TimerTimeout(timer_value_at_termination) => {
-                        let _ = timestamps.push(core::time::Duration::from_micros(timer_value_at_termination.get_raw_value() as u64));
-                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: {}, lvl:{:?}, N={}", timer_value_at_termination.get_raw_value(), init_level, timestamps.len()).ok();
+                    TimerCaptureResultAvailable::TimerTimeout(timer_capture_data) => {
+                        let timestamps = timer_capture_data.get_data();
+                        container.extend(timestamps.iter().map(|v| CapturedEdgePeriod::RisingToRising(*v)));
+                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: {:?}, N={}", timestamps, timestamps.len()).ok();
+                        (self, Ok((container, CaptureTypeEdges::RisingEdge)))
                     }
                 }
-                container.extend(final_differences.iter().map(|v| CapturedEdgePeriod::RisingToRising(*v)));
-                (self, Ok((container, CaptureTypeEdges::RisingEdge)))
             }
             else {
                 return (self, Err(CaptureError::GenericError));
