@@ -430,17 +430,27 @@ mod boiler_implementation {
                 match capture_result {
                     TimerCaptureResultAvailable::DmaPollReady(timer_capture_data) => {
                         let timestamps = timer_capture_data.get_data();
-                        container.extend(timestamps.iter().map(|v| CapturedEdgePeriod::RisingToRising(*v)));
+                        //  The underlaying driver captures only on the rising edge so the first element is StartToFirstRising: 
+                        container.extend(timestamps.iter().take(1).map(|v| CapturedEdgePeriod::StartToFirstRising(*v)));
+                        //  The middle part without first and last, is RisignToRising:
+                        container.extend(timestamps.iter().skip(1).take(timestamps.len()-2).map(|v| CapturedEdgePeriod::RisingToRising(*v)));
+                        //  ... and the last one is RisingToStop:
+                        container.extend(timestamps.iter().skip(timestamps.len()-1).map(|v| CapturedEdgePeriod::RisingToStop(*v)));
                         hprintln!("TimerCaptureResultAvailable::DmaPollReady: {:?}, N={}", timestamps, timestamps.len()).ok();
-                        (self, Ok((container, CaptureTypeEdges::RisingEdge)))
                     }
                     TimerCaptureResultAvailable::TimerTimeout(timer_capture_data) => {
                         let timestamps = timer_capture_data.get_data();
-                        container.extend(timestamps.iter().map(|v| CapturedEdgePeriod::RisingToRising(*v)));
-                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: {:?}, N={}", timestamps, timestamps.len()).ok();
-                        (self, Ok((container, CaptureTypeEdges::RisingEdge)))
+                        container.extend(timestamps.iter().take(1).map(|v| CapturedEdgePeriod::StartToFirstRising(*v)));
+                        //  The middle part without first and last, is RisignToRising:
+                        container.extend(timestamps.iter().skip(1).take(timestamps.len()-2).map(|v| CapturedEdgePeriod::RisingToRising(*v)));
+                        //  ... and the last one is RisingToStop:
+                        container.extend(timestamps.iter().skip(timestamps.len()-1).map(|v| CapturedEdgePeriod::RisingToStop(*v)));
+                        //  hprintln!("TimerCaptureResultAvailable::TimerTimeout: {:?}, N={}", timestamps, timestamps.len()).ok();
+                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: last: {:?}", timestamps.iter().last()).ok();
                     }
                 }
+                
+                (self, Ok((container, CaptureTypeEdges::RisingEdge)))
             }
             else {
                 return (self, Err(CaptureError::GenericError));
