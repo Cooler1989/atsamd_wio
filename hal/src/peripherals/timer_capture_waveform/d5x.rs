@@ -86,7 +86,7 @@ pub struct TimerCaptureData<Container: iter::Extend<core::time::Duration>> {
     data: Container,
 }
 
-impl<Container> TimerCaptureData<Container> 
+impl<Container> TimerCaptureData<Container>
 where
     Container: iter::Extend<core::time::Duration>
 {
@@ -156,7 +156,7 @@ struct TimerCaptureRawData<'a> {
 // TODO: DmaPollReady and TimerTimeout should be merged into one trait / type to avoid processing code duplication:
 #[derive(Debug, PartialEq, Eq)]
 pub enum TimerCaptureRawResultAvailable<'a> {
-    DmaPollReady(TimerCaptureRawData<'a>),  
+    DmaPollReady(TimerCaptureRawData<'a>),
     TimerTimeout(TimerCaptureRawData<'a>),
 }
 
@@ -171,7 +171,7 @@ impl<'a> AsMut<TimerCaptureRawData<'a>> for TimerCaptureRawResultAvailable<'a> {
 
 impl<'a> TimerCaptureRawResultAvailable<'a> {
     pub fn get_public_data<Container: iter::Extend<core::time::Duration>>(self, mut container: Container) -> TimerCaptureResultAvailable<Container> {
-        let adjust_ratio = |x| {(x as u64 * 4173) / 1000};  //  TODO: fix this by some ratio compund type
+        let adjust_ratio = |x| {(x as u64 * 4173*2) / 1000};  //  TODO: fix this by some ratio compund type
 
         match self {
             TimerCaptureRawResultAvailable::DmaPollReady(data) => {
@@ -184,8 +184,8 @@ impl<'a> TimerCaptureRawResultAvailable<'a> {
                     let data_with_preceeding_zero = ExtendWithFirstZeroAndTerminationValueIterator::new(data, counter_value_at_termination);
                     container.extend(data_with_preceeding_zero.clone().
                         zip(data_with_preceeding_zero.skip(1)).
-                        map(|(x, y)|{ 
-                            if y > x { 
+                        map(|(x, y)|{
+                            if y > x {
                                 core::time::Duration::from_nanos(adjust_ratio(y as u64 - x as u64))
                             } else {
                                 //  TODO: Better handling for errror here:
@@ -193,8 +193,6 @@ impl<'a> TimerCaptureRawResultAvailable<'a> {
                             }
                         }
                     ));
-                    //  TODO: do the conversion here:
-                    container.extend(data.iter().map(|x| core::time::Duration::from_nanos(adjust_ratio(*x as u64))));
                     TimerCaptureResultAvailable::TimerTimeout(TimerCaptureData {
                         data: container,
                     })
@@ -203,8 +201,8 @@ impl<'a> TimerCaptureRawResultAvailable<'a> {
             }
         }
     }
-    pub fn fill_the_capture_memory<'b>(&mut self, capture_memory: &'b mut [u32]) 
-    where 
+    pub fn fill_the_capture_memory<'b>(&mut self, capture_memory: &'b mut [u32])
+    where
         'b: 'a,
     {
         self.as_mut().data = Some(capture_memory);
@@ -219,10 +217,10 @@ pub enum TimerCaptureFailure {
 
 impl<'a, DmaFut, T> TimerCaptureDmaWrapper<'a, DmaFut, T> {
     fn new(dma_future: DmaFut, timer: &'a T, tc_index: usize) -> Self {
-        Self { 
-            _dma_future: dma_future, 
-            timer_started: false, 
-            tc_waker_index:tc_index, 
+        Self {
+            _dma_future: dma_future,
+            timer_started: false,
+            tc_waker_index:tc_index,
             _timer: timer,
          }
     }

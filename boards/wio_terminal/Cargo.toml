@@ -45,7 +45,7 @@ embassy-futures = { version = "0.1.0" }
 embassy-executor = { version = "0.6.2", features = [
   "arch-cortex-m",
   "executor-thread",
-  "task-arena-size-8192",
+  "task-arena-size-12288",
 ] }
 rtic-monotonics = { version = "2.0.1", features = ["cortex-m-systick"] }
 
