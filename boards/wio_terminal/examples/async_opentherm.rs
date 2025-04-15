@@ -366,7 +366,7 @@ mod boiler_implementation {
     where
         PinoutSpecificData: CreatePwmPinout,
     {
-        async fn start_capture<OutputType: IntoIterator<Item=CapturedEdgePeriod> + Extend<CapturedEdgePeriod>>(
+        async fn start_capture<OutputType: Extend<CapturedEdgePeriod>>(
             mut self,
             mut container: OutputType,  // fills the container with captured edges or drops it in case of error
             timeout_inactive_capture: Duration,
