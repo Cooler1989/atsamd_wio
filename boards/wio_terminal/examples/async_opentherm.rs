@@ -327,33 +327,18 @@ mod boiler_implementation {
         ) -> (Self, Result<(), TriggerError>) {
 
             //  Invert for hardware adapter compensation:
-            let invert_signal = true;
+            const INVERT_SIGNAL: bool = true;
             //  TODO: Implement the period arg usage
             let response = match self.pwm.as_mut() {
                 Some(pwm) => {
-                    let mut source: [u8; N] = [self.tx_init_duty_value; N];
-                    for (idx, value) in iterator.enumerate() {
-                        //  TODO: move it to the right because for a reason it is not visisble on the wire
-                        //  plus resolve the initial driver state. Before the first TX it is low instead of high.
-                        let idx = idx + 2;
-                        if idx >= N {
-                            break;
-                        }
-                        //  Implement conditional inversion of the signal:
-                        let value = value != invert_signal;
-                        //  TODO: Implement configurable idle bus state level
-                        let level = if value { 0xffu8 } else { 0x00u8 };
-                        source[idx] = level;
-                        //  hprintln!("trigger::source[{}]: {}", idx, level).ok();
-                    }
-                    //  return:
+                    //  let mut source: [u8; N] = [self.tx_init_duty_value; N];
                     //  TODO: Actually use the period to set the PWM frequency
                     pwm.start_regular_pwm(self.tx_init_duty_value);
                     let dma_future = self
                         .pwm
                         .as_mut()
                         .unwrap() /* TODO: remove runtime panic */
-                        .start_timer_prepare_dma_transfer(self.tx_init_duty_value, &mut source);
+                        .start_timer_prepare_dma_transfer::<N, INVERT_SIGNAL>(self.tx_init_duty_value, iterator);
                     dma_future.await.map_err(|_| TriggerError::GenericError)
                 }
                 None => Err(TriggerError::GenericError),
