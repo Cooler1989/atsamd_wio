@@ -1146,7 +1146,7 @@ checksum = "1f878075b9794c1e4ac788c95b728f26aa6366d32eeb10c7051389f898f7d067"
 [[package]]
 name = "embassy-futures"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/embassy#659c616f9f13aa6f157eaef5279f09805449b5be"
+source = "git+https://github.com/embassy-rs/embassy#dd787c3727baea417ca68ee0cff69884122dfea8"
 
 [[package]]
 name = "embassy-sync"
@@ -1679,9 +1679,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.171"
+version = "0.2.172"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c19937216e9d3aa9956d9bb8dfc0b0c8beb6058fc4f7a4dc4d850edf86a237d6"
+checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "libm"
@@ -2050,7 +2050,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "opentherm_boiler_controller_lib"
 version = "0.1.0"
-source = "git+ssh://cooler1989@bitbucket.org/learn-rust/boiler_controller_ot_lib.git?branch=passing_around_slices_instead_of_iterators#1dbc00b725658338d07c95f779db8c55da6bc290"
+source = "git+ssh://cooler1989@bitbucket.org/learn-rust/boiler_controller_ot_lib.git?branch=passing_around_slices_instead_of_iterators#6677a14a5b0737da04d3f484919bbe82b0db6453"
 dependencies = [
  "embassy-futures 0.1.1 (git+https://github.com/embassy-rs/embassy)",
  "log",
@@ -2061,7 +2061,7 @@ dependencies = [
 [[package]]
 name = "opentherm_interface"
 version = "0.1.0"
-source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#ef88f4daa10987496db2c3c1b287eda2324cbe9e"
+source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#9a581a07ed2e0f41dd328d3fa4da6729d1a3733d"
 dependencies = [
  "heapless 0.8.0",
  "log",
