@@ -45,7 +45,11 @@ pub trait PwmWgFutureTrait {
 
     fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
     fn start_regular_pwm(&mut self, ccx_value: u8);
-    async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(), DmacError>;
+    async fn start_timer_prepare_dma_transfer<const N:usize, const INVERT:bool>(
+        &mut self, 
+        ccx_value:u8, 
+        generation_pattern_iter: impl Iterator<Item=bool>) 
+    -> Result<(), DmacError>;
 }
 pub trait PwmBaseTrait {
     type TC;
@@ -90,10 +94,15 @@ pub struct $TYPE<I: PinId> {
 paste!{
 pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>>{
     base_pwm: $TYPE<I>,
-    _channel: DmaCh
+    _channel: DmaCh,
+    _init_level: u8,
 }
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> [<$TYPE Future>]<I, DmaCh> {
+    fn get_init_level(&self) -> u8 {
+        self._init_level
+    }
+
 }
 
 impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TYPE Future>]<I, DmaCh> {
@@ -101,7 +110,25 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TY
     type TC = crate::pac::$TC;
     type Pinout = $pinout<I>;
 
-    async fn start_timer_prepare_dma_transfer(&mut self, ccx_value:u8, generation_pattern: &mut [u8]) -> Result<(), DmacError> {
+    async fn start_timer_prepare_dma_transfer<const N: usize, const INVERT: bool>(&mut self, ccx_value:u8, generation_pattern_iter: impl Iterator<Item=bool>) 
+        -> Result<(), DmacError> {
+
+        let init_level = self.get_init_level();
+        let mut generation_pattern_dma: [u8; N] = [init_level; N];
+        for (idx, value) in generation_pattern_iter.enumerate() {
+            //  TODO: move it to the right because for a reason it is not visisble on the wire
+            //  plus resolve the initial driver state. Before the first TX it is low instead of high.
+            let idx = idx + 2;
+            if idx >= N {
+                break;
+            }
+            //  Implement conditional inversion of the signal:
+            let value = value != INVERT;
+            //  TODO: Implement configurable idle bus state level
+            let level = if value { 0xffu8 } else { 0x00u8 };
+            generation_pattern_dma[idx] = level;
+            //  hprintln!("trigger::source[{}]: {}", idx, level).ok();
+        }
 
         let count = self.base_pwm.tc.count8();
 
@@ -114,7 +141,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TY
 
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
         let dma_future = self._channel.as_mut().transfer_future(
-            generation_pattern,
+            &mut generation_pattern_dma,
             pwm_dma_address,
             TriggerSource::$event,
             TriggerAction::Burst,
@@ -133,6 +160,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> PwmWgFutureTrait for [<$TY
         value_to_return
     }
     fn start_regular_pwm(&mut self, ccx_value: u8) {
+        self._init_level = ccx_value;
         let count = self.base_pwm.tc.count8();
         count.cc(0).write(|w| unsafe { w.bits(0x00u8) });
         while count.syncbusy().read().cc0().bit_is_set() {}
@@ -248,6 +276,7 @@ impl<I: PinId> PwmBaseTrait for $TYPE<I> {
         [<$TYPE Future>] {
             base_pwm: self,
             _channel: channel,
+            _init_level: 0x00u8,
         }
     }
 }
@@ -261,7 +290,6 @@ impl<I: PinId> $TYPE<I> {
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
     }
-
     pub fn GetDmaPtr(tc: crate::pac::$TC) -> PwmWaveformGeneratorPtr<u8> {
         PwmWaveformGeneratorPtr(tc.count8().ccbuf(1).as_ptr() as *mut _)
     }

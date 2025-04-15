@@ -120,7 +120,7 @@ impl<'a> iter::Iterator for ExtendWithFirstZeroAndTerminationValueIterator<'a> {
     type Item = u32;
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.len() == 0 {
-            if (self.depleted == false) {
+            if self.depleted == false {
                 self.depleted = true;
                 if let CounterValueAtTermination(value) = self.last_value {
                     return Some(value);
