@@ -370,7 +370,6 @@ mod boiler_implementation {
                 .as_mut()
                 .unwrap()
                 .start_timer_execute_dma_transfer::<_, N>(data_container).await;
-                //  .start_capture(timeout_inactive_capture, timeout_till_active_capture)
             if let Ok(capture_result) = result {
 
                 //  let mut timestamps = Vec::<core::time::Duration, N>::new();
@@ -413,28 +412,22 @@ mod boiler_implementation {
                 //  (self, Ok((container, CaptureTypeEdges::RisingEdge)))
 
                 match capture_result {
-                    TimerCaptureResultAvailable::DmaPollReady(timer_capture_data) => {
+                    TimerCaptureResultAvailable::DmaPollReady(timer_capture_data) | TimerCaptureResultAvailable::TimerTimeout(timer_capture_data) => {
                         let timestamps = timer_capture_data.get_data();
-                        //  The underlaying driver captures only on the rising edge so the first element is StartToFirstRising: 
-                        container.extend(timestamps.iter().take(1).map(|v| CapturedEdgePeriod::StartToFirstRising(*v)));
-                        //  The middle part without first and last, is RisignToRising:
-                        container.extend(timestamps.iter().skip(1).take(timestamps.len()-2).map(|v| CapturedEdgePeriod::RisingToRising(*v)));
-                        //  ... and the last one is RisingToStop:
-                        container.extend(timestamps.iter().skip(timestamps.len()-1).map(|v| CapturedEdgePeriod::RisingToStop(*v)));
-                        hprintln!("TimerCaptureResultAvailable::DmaPollReady: {:?}, N={}", timestamps, timestamps.len()).ok();
-                    }
-                    TimerCaptureResultAvailable::TimerTimeout(timer_capture_data) => {
-                        let timestamps = timer_capture_data.get_data();
+                        if timestamps.len() < 3 {
+                            hprintln!("TimerCaptureResultAvailable::[dma/timeout] timestamps: {:?}", timestamps).ok();
+                            return (self, Err(CaptureError::GenericError));
+                        }
                         container.extend(timestamps.iter().take(1).map(|v| CapturedEdgePeriod::StartToFirstRising(*v)));
                         //  The middle part without first and last, is RisignToRising:
                         container.extend(timestamps.iter().skip(1).take(timestamps.len()-2).map(|v| CapturedEdgePeriod::RisingToRising(*v)));
                         //  ... and the last one is RisingToStop:
                         container.extend(timestamps.iter().skip(timestamps.len()-1).map(|v| CapturedEdgePeriod::RisingToStop(*v)));
                         //  hprintln!("TimerCaptureResultAvailable::TimerTimeout: {:?}, N={}", timestamps, timestamps.len()).ok();
-                        hprintln!("TimerCaptureResultAvailable::TimerTimeout: last: {:?}", timestamps.iter().last()).ok();
+                        hprintln!("TimerCaptureResultAvailable::[dma/timeout] last: {:?}", timestamps.iter().last()).ok();
                     }
                 }
-                
+
                 (self, Ok((container, CaptureTypeEdges::RisingEdge)))
             }
             else {
@@ -491,48 +484,6 @@ mod boiler_implementation {
         }
     }
 
-    //  struct AtsamdEdgeTriggerCaptureRuntime<
-    //      //      const N: usize = VEC_SIZE_CAPTURE,
-    //  > {
-    //      dev_tx: AtsamdEdgeTriggerCapture<OtTx, N>,
-    //      dev_rx: AtsamdEdgeTriggerCapture<OtRx, N>,
-    //  }
-
-    //  impl<const N: usize> EdgeCaptureInterface<N> for AtsamdEdgeTriggerCaptureRuntime<'_, N>
-    //  {
-    //      async fn start_capture(
-    //          self,
-    //          timeout_inactive_capture: core::time::Duration,
-    //          timeout_till_active_capture: core::time::Duration,
-    //      ) -> (
-    //          Self,
-    //          Result<(InitLevel, Vec<core::time::Duration, N>), CaptureError>,
-    //      ) {
-    //          todo!()
-    //      }
-    //  }
-
-    //  trait EdgeTriggerTransitiveToCaptureCapable<const N:usize>: EdgeTriggerInterface {
-    //      //  if the driver is able to transition to both RX and TX mode than this trait can be used to provide transitionio and implement both interfaces for us
-    //      type CaptureDevice: EdgeCaptureTransitiveToTriggerCapable<N>;
-    //      fn transition_to_capture_capable_device(self) -> Self::CaptureDevice;
-    //  }
-    //
-    //  trait EdgeCaptureTransitiveToTriggerCapable<const N:usize>: EdgeCaptureInterface<N> {
-    //      //  if the driver is able to transition to both RX and TX mode than this trait can be used to provide transitionio and implement both interfaces for us
-    //      type TriggerDevice: EdgeTriggerTransitiveToCaptureCapable<N>;
-    //      fn transition_to_trigger_capable_device(self) -> Self::TriggerDevice;
-    //  }
-
-    //  trait EdgeTriggerAndTransitiveToCaptureCapable: EdgeTriggerTransitiveToCaptureCapable {}
-    //  trait EdgeCaptureAndTransisiveToTriggerCapable: EdgeCaptureTransitiveToTriggerCapable {}
-    //
-    //  trait OpenThermTransitiveBus {
-    //      type EdgeTriggerAndTransitive: EdgeTriggerTransitiveToCaptureCapable;
-    //      type EdgeCaptureAndTransisive: EdgeCaptureTransitiveToTriggerCapable;
-    //  }
-
-    //  impl EdgeCaptureInterface for OpenThermTransitiveBus {
 }
 
 #[inline]
@@ -731,14 +682,13 @@ async fn main(spawner: embassy_executor::Spawner) {
             device
         };
 
-        let rx_async = async {
+        let rx_async = async |&count_all| {
             let dur = Duration::from_millis(100);
             let start_time = Mono::now();
             let (tx_device, result) =
-                edge_trigger_capture_dev./*start_capture(dur, dur).await;*/
+                edge_trigger_capture_dev.
                     listen_open_therm_message()/* -> (Self, Result<OpenThermMessage, Error>)*/.await;
             let duration = Mono::now() - start_time;
-            count_all += 1;
             match result {
                 Ok(message) => {
                     count_success += 1;
@@ -750,9 +700,12 @@ async fn main(spawner: embassy_executor::Spawner) {
             tx_device
         };
 
+        count_all += 1;
+        hprintln!("start: {}", count_all).ok();
         //  TODO: how to join the two futures and return devices as a result after execution?
         let (tx_result, rx_result) =
-            embassy_futures::join::join(tx_async_simulation, rx_async).await;
+            embassy_futures::join::join(tx_async_simulation, rx_async(&count_all)).await;
+        hprintln!("stop: {}", count_all).ok();
 
         //  TODO: Count successes and errors.
 
