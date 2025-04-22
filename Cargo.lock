@@ -1126,6 +1126,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-executor"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90327bcc66333a507f89ecc4e2d911b265c45f5c9bc241f98eee076752d35ac6"
+dependencies = [
+ "cortex-m",
+ "critical-section",
+ "document-features",
+ "embassy-executor-macros",
+]
+
+[[package]]
 name = "embassy-executor-macros"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1146,7 +1158,7 @@ checksum = "1f878075b9794c1e4ac788c95b728f26aa6366d32eeb10c7051389f898f7d067"
 [[package]]
 name = "embassy-futures"
 version = "0.1.1"
-source = "git+https://github.com/embassy-rs/embassy#dd787c3727baea417ca68ee0cff69884122dfea8"
+source = "git+https://github.com/embassy-rs/embassy#9907f5683bc3d2c436e03143b32c20c41251f457"
 
 [[package]]
 name = "embassy-sync"
@@ -1325,7 +1337,7 @@ dependencies = [
  "defmt 0.3.100",
  "defmt-rtt",
  "drogue-nom-utils",
- "embassy-executor",
+ "embassy-executor 0.6.3",
  "embedded-graphics 0.7.1",
  "embedded-sdmmc 0.3.0",
  "fugit",
@@ -1685,9 +1697,9 @@ checksum = "d750af042f7ef4f724306de029d18836c26c1765a54a6a3f094cbd23a7267ffa"
 
 [[package]]
 name = "libm"
-version = "0.2.11"
+version = "0.2.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8355be11b20d696c8f18f6cc018c4e372165b1fa8126cef092399c9951984ffa"
+checksum = "c9627da5196e5d8ed0b0495e61e518847578da83483c37288316d9b2e03a7f72"
 
 [[package]]
 name = "lis3dh"
@@ -1811,7 +1823,7 @@ dependencies = [
  "cortex-m-semihosting 0.3.7",
  "defmt 0.3.100",
  "defmt-rtt",
- "embassy-executor",
+ "embassy-executor 0.6.3",
  "embedded-hal 1.0.0",
  "embedded-hal-nb",
  "panic-halt 0.2.0",
@@ -2050,7 +2062,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 [[package]]
 name = "opentherm_boiler_controller_lib"
 version = "0.1.0"
-source = "git+ssh://cooler1989@bitbucket.org/learn-rust/boiler_controller_ot_lib.git?branch=passing_around_slices_instead_of_iterators#6677a14a5b0737da04d3f484919bbe82b0db6453"
+source = "git+ssh://cooler1989@bitbucket.org/learn-rust/boiler_controller_ot_lib.git?branch=passing_around_slices_instead_of_iterators#88654c48f19bf23e9b26a60804ba5370098693c2"
 dependencies = [
  "embassy-futures 0.1.1 (git+https://github.com/embassy-rs/embassy)",
  "log",
@@ -2061,7 +2073,7 @@ dependencies = [
 [[package]]
 name = "opentherm_interface"
 version = "0.1.0"
-source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#9a581a07ed2e0f41dd328d3fa4da6729d1a3733d"
+source = "git+ssh://cooler1989@bitbucket.org/learn-rust/embassyot.git?branch=passing_around_slices_instead_of_iterators#9ca900d47763e2dd0dd6b9a3dd10ca45305dc039"
 dependencies = [
  "heapless 0.8.0",
  "log",
@@ -2288,9 +2300,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.94"
+version = "1.0.95"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a31971752e70b8b2686d7e46ec17fb38dad4051d94024c88df49b667caea9c84"
+checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
 dependencies = [
  "unicode-ident",
 ]
@@ -3142,7 +3154,7 @@ dependencies = [
  "defmt 0.3.100",
  "defmt-rtt",
  "display-interface-spi",
- "embassy-executor",
+ "embassy-executor 0.7.0",
  "embassy-futures 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "embassy-sync",
  "embedded-graphics 0.7.1",
