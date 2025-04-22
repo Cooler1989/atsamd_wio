@@ -226,7 +226,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<PinoutSpecificData, const N: usize> EdgeTriggerTransitiveToCaptureCapable<N>
+    impl<PinoutSpecificData, const N: usize> EdgeTriggerTransitiveToCaptureCapable
         for AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N>
     where
         PinoutSpecificData: CreatePwmPinout,
@@ -248,7 +248,7 @@ mod boiler_implementation {
         }
     }
 
-    impl<PinoutSpecificData, const N: usize> EdgeCaptureTransitiveToTriggerCapable<N>
+    impl<PinoutSpecificData, const N: usize> EdgeCaptureTransitiveToTriggerCapable
         for AtsamdEdgeTriggerCapture<PinoutSpecificData, OtRx, N>
     where
         PinoutSpecificData: CreatePwmPinout,
@@ -320,6 +320,7 @@ mod boiler_implementation {
     where
         PinoutSpecificData: CreatePwmPinout,
     {
+        type OutputSelf = Self;
         async fn trigger(
             mut self,
             iterator: impl Iterator<Item = bool>,
@@ -351,6 +352,7 @@ mod boiler_implementation {
     where
         PinoutSpecificData: CreatePwmPinout,
     {
+        type OutputSelf = Self;
         async fn start_capture<OutputType: Extend<CapturedEdgePeriod>>(
             mut self,
             mut container: OutputType,  // fills the container with captured edges or drops it in case of error
@@ -449,6 +451,7 @@ mod boiler_implementation {
     }
 
     impl EdgeTriggerInterface for AtsamdGpioEdgeTriggerDev {
+        type OutputSelf = Self;
         async fn trigger( mut self, iterator: impl Iterator<Item = bool>,
                           period: core::time::Duration) -> (Self, Result<(), TriggerError>) {
 
