@@ -1,9 +1,9 @@
 use atsamd_hal::clock::GenericClockController;
 use atsamd_hal::ehal;
 use atsamd_hal::ehal::delay::DelayNs;
-use atsamd_hal::ehal_nb::serial::Write;
 use atsamd_hal::ehal::digital::OutputPin;
 use atsamd_hal::ehal::spi::{Phase, Polarity, SpiBus, SpiDevice};
+use atsamd_hal::ehal_nb::serial::Write;
 use atsamd_hal::pac::Mclk;
 use atsamd_hal::sercom::spi;
 use atsamd_hal::sercom::spi::Spi;
@@ -46,14 +46,10 @@ pub type LcdSpiWrapper = SpiDeviceWrapper<LcdCs>;
 /// Type alias for the ILI9341 LCD display.
 //  pub type LCD = Ili9341<SPIInterface<LcdSpi, LcdDc>, LcdReset>;
 pub type LCD = Ili9341<SPIInterface<LcdSpiWrapper, LcdDc>, LcdReset>;
-//  impl<SPI, DC> WriteOnlyDataCommand for SPIInterface<SPI, DC>
-//  where
-//      SPI: SpiDevice,
-//      DC: OutputPin,
 
 pub use ili9341::Scroller;
 
-pub struct SpiDeviceWrapper<DC>{
+pub struct SpiDeviceWrapper<DC> {
     spi: LcdSpi,
     dc: DC,
 }
@@ -63,11 +59,11 @@ impl<DC> SpiDeviceWrapper<DC> {
         Self { spi, dc }
     }
 }
-use atsamd_hal::ehal::spi::{Operation, ErrorType as SpiErrorType};
-impl<Cs> SpiErrorType for SpiDeviceWrapper<Cs> {
+use atsamd_hal::ehal::spi::{ErrorType as SpiErrorType, Operation};
+impl<Dc> SpiErrorType for SpiDeviceWrapper<Dc> {
     type Error = spi::Error;
 }
-impl<Cs> ehal::spi::SpiDevice<u8> for SpiDeviceWrapper<Cs> {
+impl<Dc> ehal::spi::SpiDevice<u8> for SpiDeviceWrapper<Dc> {
     /// Perform a transaction against the device.
     ///
     /// - Locks the bus
@@ -83,7 +79,7 @@ impl<Cs> ehal::spi::SpiDevice<u8> for SpiDeviceWrapper<Cs> {
     ///
     /// On bus errors the implementation should try to deassert CS.
     /// If an error occurs while deasserting CS the bus error should take priority as the return value.
-    fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Self::Error>{
+    fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Self::Error> {
         todo!()
     }
 
@@ -94,8 +90,8 @@ impl<Cs> ehal::spi::SpiDevice<u8> for SpiDeviceWrapper<Cs> {
     /// See also: [`SpiDevice::transaction`], [`SpiBus::read`]
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> Result<(), Self::Error> {
-       // self.spi.read(buf)
-       todo!() 
+        // self.spi.read(buf)
+        todo!()
     }
 
     /// Do a write within a transaction.
@@ -105,8 +101,8 @@ impl<Cs> ehal::spi::SpiDevice<u8> for SpiDeviceWrapper<Cs> {
     /// See also: [`SpiDevice::transaction`], [`SpiBus::write`]
     #[inline]
     fn write(&mut self, buf: &[u8]) -> Result<(), Self::Error> {
-       SpiBus::write(&mut self.spi, buf);
-       Ok(())
+        SpiBus::write(&mut self.spi, buf);
+        Ok(())
     }
 
     /// Do a transfer within a transaction.

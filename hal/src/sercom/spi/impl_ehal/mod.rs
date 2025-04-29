@@ -225,7 +225,7 @@ where
 {
     #[inline]
     fn read(&mut self, _words: &mut [Word<C>]) -> Result<(), Self::Error> {
-        Ok(())  // Nothing to do for TX only device
+        Ok(()) // Nothing to do for TX only device
     }
 
     #[inline]

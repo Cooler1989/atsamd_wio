@@ -1,9 +1,7 @@
 use atsamd_hal::clock::GenericClockController;
 use atsamd_hal::eic;
-use atsamd_hal::eic::{
-    Eic, Sense,
-};
-use atsamd_hal::pac::{interrupt, Mclk, Eic as PacEic};
+use atsamd_hal::eic::{Eic, Sense};
+use atsamd_hal::pac::{interrupt, Eic as PacEic, Mclk};
 
 use cortex_m::peripheral::NVIC;
 
@@ -45,8 +43,8 @@ impl ButtonPins {
         // ExtInt line as up on the joystick. As such, we don't
         // support B1.
 
-        let eic_channels = eic.split();  // Eic::new(&mut mclk, eic_clock, eic).split();
-        // let mut b1 = self.button1.into_floating_ei(port);
+        let eic_channels = eic.split(); // Eic::new(&mut mclk, eic_clock, eic).split();
+                                        // let mut b1 = self.button1.into_floating_ei(port);
         let mut b2 = eic_channels.11.with_pin(self.button2.into());
         let mut b3 = eic_channels.12.with_pin(self.button3.into());
         let mut x = eic_channels.3.with_pin(self.switch_x.into());
