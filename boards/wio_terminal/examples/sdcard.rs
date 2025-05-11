@@ -22,9 +22,10 @@ use wio::prelude::*;
 use core::fmt::Write;
 use heapless::String;
 
-use embedded_sdmmc::{TimeSource, Timestamp, VolumeIdx};
+use embedded_sdmmc::{sdcard::Error as SdCardError, TimeSource, Timestamp, VolumeIdx};
 use wio::SDCardController;
 
+#[allow(clippy::empty_loop)]
 #[entry]
 fn main() -> ! {
     let mut peripherals = Peripherals::take().unwrap();
@@ -41,16 +42,6 @@ fn main() -> ! {
     let mut delay = Delay::new(core.SYST, &mut clocks);
     let sets = wio::Pins::new(peripherals.port).split();
 
-    let (mut cont, _sd_present) = sets
-        .sd_card
-        .init(
-            &mut clocks,
-            peripherals.sercom6,
-            &mut peripherals.mclk,
-            Clock,
-        )
-        .unwrap();
-
     // Initialize the ILI9341-based LCD display. Create a black backdrop the size of
     // the screen.
     let (mut display, _backlight) = sets
@@ -65,68 +56,67 @@ fn main() -> ! {
         .unwrap();
 
     let style = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
-
-    loop {
-        match cont.device().init() {
-            Ok(_) => {
-                // Now that we have initialized, we can run the SPI bus at
-                // a reasonable speed.
-                cont.set_baud(20.MHz());
-
-                let mut data = String::<128>::new();
-                write!(data, "OK! ").unwrap();
-                match cont.device().card_size_bytes() {
-                    Ok(size) => writeln!(data, "{}Mb", size / 1024 / 1024).unwrap(),
-                    Err(e) => writeln!(data, "Err: {:?}", e).unwrap(),
-                }
-                Text::with_baseline(data.as_str(), Point::new(4, 2), style, Baseline::Top)
-                    .draw(&mut display)
-                    .ok()
-                    .unwrap();
-
-                if let Err(e) = print_contents(&mut cont, &mut display) {
-                    let mut data = String::<128>::new();
-                    writeln!(data, "Err: {:?}", e).unwrap();
-                    Text::with_baseline(data.as_str(), Point::new(4, 20), style, Baseline::Top)
-                        .draw(&mut display)
-                        .ok()
-                        .unwrap();
-                }
+    match sets.sd_card.init(
+        &mut clocks,
+        peripherals.sercom6,
+        &mut peripherals.mclk,
+        delay,
+        Clock,
+    ) {
+        Ok((mut sd_controller, _sd_present)) => loop {
+            let mut data = String::<128>::new();
+            match sd_controller.device().num_bytes() {
+                Ok(size) => writeln!(data, "{}Mb", size / 1024 / 1024).unwrap(),
+                Err(e) => writeln!(data, "Err: {:?}", e).unwrap(),
             }
-            Err(e) => {
+            Text::with_baseline(data.as_str(), Point::new(4, 2), style, Baseline::Top)
+                .draw(&mut display)
+                .ok()
+                .unwrap();
+            if let Err(e) = print_contents(&mut sd_controller, &mut display) {
                 let mut data = String::<128>::new();
-                writeln!(data, "Error!: {:?}", e).unwrap();
-                Text::with_baseline(data.as_str(), Point::new(4, 2), style, Baseline::Top)
+                writeln!(data, "Err: {:?}", e).unwrap();
+                Text::with_baseline(data.as_str(), Point::new(4, 20), style, Baseline::Top)
                     .draw(&mut display)
                     .ok()
                     .unwrap();
             }
+
+            Rectangle::with_corners(Point::new(0, 0), Point::new(320, 240))
+                .into_styled(
+                    PrimitiveStyleBuilder::new()
+                        .fill_color(Rgb565::BLACK)
+                        .build(),
+                )
+                .draw(&mut display)
+                .ok()
+                .unwrap();
+        },
+        Err(e) => {
+            let mut data = String::<128>::new();
+            writeln!(data, "Error!: {:?}", e).unwrap();
+            Text::with_baseline(data.as_str(), Point::new(4, 2), style, Baseline::Top)
+                .draw(&mut display)
+                .ok()
+                .unwrap();
+            loop {}
         }
-
-        delay.delay_ms(2500_u16);
-        Rectangle::with_corners(Point::new(0, 0), Point::new(320, 240))
-            .into_styled(
-                PrimitiveStyleBuilder::new()
-                    .fill_color(Rgb565::BLACK)
-                    .build(),
-            )
-            .draw(&mut display)
-            .ok()
-            .unwrap();
     }
 }
 
 fn print_contents(
-    cont: &mut SDCardController<Clock>,
+    sd_controller: &mut SDCardController<Clock>,
     lcd: &mut wio::LCD,
-) -> Result<(), embedded_sdmmc::Error<embedded_sdmmc::SdMmcError>> {
+) -> Result<(), embedded_sdmmc::Error<SdCardError>> {
     let style = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
 
-    let volume = cont.get_volume(VolumeIdx(0))?;
-    let dir = cont.open_root_dir(&volume)?;
+    let mut volume = sd_controller
+        .open_volume(VolumeIdx(0))
+        .expect("Failed to open volume");
+    let mut dir = volume.open_root_dir().expect("Failed to open root dir");
 
     let mut count = 0;
-    let out = cont.iterate_dir(&volume, &dir, |ent| {
+    let out = dir.iterate_dir(|ent| {
         let mut data = String::<128>::new();
         writeln!(data, "{} - {:?}", ent.name, ent.attributes).unwrap();
         Text::with_baseline(
@@ -140,7 +130,7 @@ fn print_contents(
         .unwrap();
         count += 1;
     });
-    cont.close_dir(&volume, dir);
+    let _ = dir.close();
     out
 }
 
