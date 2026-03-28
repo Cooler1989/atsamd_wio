@@ -27,3 +27,6 @@ lto = "thin"
 lto = true
 opt-level = "s"
 debug = true
+
+[patch.crates-io]
+seeed-erpc = { path = "../seeed-erpc-rs" }

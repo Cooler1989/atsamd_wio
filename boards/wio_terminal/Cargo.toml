@@ -130,4 +130,8 @@ name = "wifi_connect"
 required-features = ["wifi"]
 
 [[example]]
+name = "wifi_udp_echo"
+required-features = ["wifi"]
+
+[[example]]
 name = "snake"
