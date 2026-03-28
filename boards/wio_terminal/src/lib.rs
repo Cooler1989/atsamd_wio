@@ -48,7 +48,12 @@ mod wifi;
 pub use wifi::{rpcs as wifi_rpcs, wifi_prelude, Wifi, WifiPins};
 #[cfg(feature = "wifi")]
 pub mod wifi_types {
-    pub use seeed_erpc::{BssType, IPInfo, L3Interface, Security, WifiMode, BSSID, SSID};
+    pub use seeed_erpc::{
+        BssType, IPInfo, L3Interface, Security, WifiMode, BSSID, SSID,
+        RecvResult, encode_sockaddr_in, decode_sockaddr_in,
+        AF_INET, SOCK_DGRAM, SOL_SOCKET, SO_REUSEADDR,
+        F_SETFL, O_NONBLOCK, MSG_DONTWAIT,
+    };
 }
 #[cfg(feature = "wifi-fw-before-212")]
 pub const WIFI_UART_BAUD: u32 = 1843200;

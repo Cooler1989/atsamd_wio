@@ -154,6 +154,110 @@ impl Wifi {
         .map_err(|_| erpc::Err::RPCErr(()))
     }
 
+    /// Create a non-blocking UDP socket bound to the given port.
+    ///
+    /// Sequences: `socket()` → `setsockopt(SO_REUSEADDR)` →
+    /// `bind(INADDR_ANY, port)` → `fcntl(O_NONBLOCK)`.
+    ///
+    /// Returns the socket file descriptor on success.
+    pub fn udp_bind(&mut self, port: u16) -> Result<i32, erpc::Err<()>> {
+        let fd = self
+            .blocking_rpc(rpcs::LwipSocket {
+                domain: erpc::AF_INET,
+                socket_type: erpc::SOCK_DGRAM,
+                protocol: 0,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if fd < 0 {
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        let yes: i32 = 1;
+        self.blocking_rpc(rpcs::LwipSetsockopt {
+            socket: fd,
+            level: erpc::SOL_SOCKET,
+            optname: erpc::SO_REUSEADDR,
+            optval: &yes.to_le_bytes(),
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))?;
+
+        let addr = erpc::encode_sockaddr_in([0, 0, 0, 0], port);
+        let ret = self
+            .blocking_rpc(rpcs::LwipBind {
+                socket: fd,
+                name: addr,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if ret < 0 {
+            let _ = self.blocking_rpc(rpcs::LwipClose { socket: fd });
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        self.blocking_rpc(rpcs::LwipFcntl {
+            socket: fd,
+            cmd: erpc::F_SETFL,
+            val: erpc::O_NONBLOCK,
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))?;
+
+        Ok(fd)
+    }
+
+    /// Attempt to receive a UDP datagram (non-blocking).
+    ///
+    /// Returns `Ok(Some(result))` with sender info and data if a
+    /// packet was available, or `Ok(None)` if no data pending.
+    pub fn udp_recvfrom(
+        &mut self,
+        socket: i32,
+    ) -> Result<Option<erpc::RecvResult>, erpc::Err<()>> {
+        match self.blocking_rpc(rpcs::LwipRecvfrom {
+            socket,
+            len: 256,
+            flags: erpc::MSG_DONTWAIT,
+            timeout_ms: 0,
+        }) {
+            Ok(result) => Ok(Some(result)),
+            // EWOULDBLOCK = no data available → not an error
+            Err(erpc::Err::RPCErr(_)) => Ok(None),
+            Err(e) => Err(match e {
+                erpc::Err::Parsing(p) => erpc::Err::Parsing(p),
+                erpc::Err::CRCMismatch => erpc::Err::CRCMismatch,
+                erpc::Err::TXErr => erpc::Err::TXErr,
+                erpc::Err::NotOurs => erpc::Err::NotOurs,
+                erpc::Err::ResponseOverrun => erpc::Err::ResponseOverrun,
+                _ => erpc::Err::Unknown,
+            }),
+        }
+    }
+
+    /// Send a UDP datagram to a specific destination.
+    ///
+    /// Returns the number of bytes sent on success.
+    pub fn udp_sendto(
+        &mut self,
+        socket: i32,
+        data: &[u8],
+        ip: [u8; 4],
+        port: u16,
+    ) -> Result<i32, erpc::Err<()>> {
+        let dest = erpc::encode_sockaddr_in(ip, port);
+        self.blocking_rpc(rpcs::LwipSendto {
+            socket,
+            data,
+            flags: 0,
+            to: dest,
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))
+    }
+
+    /// Close a socket.
+    pub fn udp_close(&mut self, socket: i32) -> Result<(), erpc::Err<()>> {
+        self.blocking_rpc(rpcs::LwipClose { socket })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        Ok(())
+    }
+
     /// Called from ISR: Handles the signal that the UART has recieved
     /// a byte that needs to be read.
     pub fn _handle_rx(&mut self) {
@@ -260,7 +364,7 @@ impl Wifi {
         }
     }
 
-    fn write_frame(&mut self, msg: &heapless::Vec<u8, 64>) -> Result<(), ()> {
+    fn write_frame(&mut self, msg: &heapless::Vec<u8, 256>) -> Result<(), ()> {
         let header = erpc::FrameHeader::new_from_msg(msg);
         self.tx(header.as_bytes().iter().chain(msg));
         Ok(())
