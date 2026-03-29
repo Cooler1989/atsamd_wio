@@ -258,6 +258,179 @@ impl Wifi {
         Ok(())
     }
 
+    // ── TCP methods ─────────────────────────────────────────────────
+
+    /// Create a TCP listening socket bound to the given port.
+    ///
+    /// The listener socket is left **blocking** so that `tcp_accept`
+    /// will block inside `blocking_rpc` until a client connects.
+    /// Use `tcp_set_nonblocking` on the *accepted* client socket
+    /// for non-blocking recv polling.
+    ///
+    /// Sequence: `socket(SOCK_STREAM)` → `setsockopt(SO_REUSEADDR)` →
+    /// `bind(INADDR_ANY, port)` → `listen(backlog)`.
+    ///
+    /// Returns the listener socket file descriptor on success.
+    pub fn tcp_listen(&mut self, port: u16, backlog: i32) -> Result<i32, erpc::Err<()>> {
+        let fd = self
+            .blocking_rpc(rpcs::LwipSocket {
+                domain: erpc::AF_INET,
+                socket_type: erpc::SOCK_STREAM,
+                protocol: 0,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if fd < 0 {
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        let yes: i32 = 1;
+        self.blocking_rpc(rpcs::LwipSetsockopt {
+            socket: fd,
+            level: erpc::SOL_SOCKET,
+            optname: erpc::SO_REUSEADDR,
+            optval: &yes.to_le_bytes(),
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))?;
+
+        let addr = erpc::encode_sockaddr_in([0, 0, 0, 0], port);
+        let ret = self
+            .blocking_rpc(rpcs::LwipBind {
+                socket: fd,
+                name: addr,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if ret < 0 {
+            let _ = self.blocking_rpc(rpcs::LwipClose { socket: fd });
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        let ret = self
+            .blocking_rpc(rpcs::LwipListen {
+                socket: fd,
+                backlog,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if ret < 0 {
+            let _ = self.blocking_rpc(rpcs::LwipClose { socket: fd });
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        Ok(fd)
+    }
+
+    /// Accept an incoming TCP connection (blocking).
+    ///
+    /// Blocks inside `blocking_rpc` until a client connects.
+    /// Returns the new client fd and remote address on success.
+    pub fn tcp_accept(
+        &mut self,
+        socket: i32,
+    ) -> Result<erpc::AcceptResult, erpc::Err<()>> {
+        self.blocking_rpc(rpcs::LwipAccept {
+            socket,
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))
+    }
+
+    /// Set a socket to non-blocking mode.
+    ///
+    /// Typically called on a client socket returned by `tcp_accept`
+    /// so that `tcp_recv` can poll without blocking.
+    pub fn tcp_set_nonblocking(&mut self, socket: i32) -> Result<(), erpc::Err<()>> {
+        self.blocking_rpc(rpcs::LwipFcntl {
+            socket,
+            cmd: erpc::F_SETFL,
+            val: erpc::O_NONBLOCK,
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))?;
+        Ok(())
+    }
+
+    /// Create a non-blocking TCP client socket connected to the given address.
+    ///
+    /// Sequence: `socket(SOCK_STREAM)` → `connect(addr)` → `fcntl(O_NONBLOCK)`.
+    ///
+    /// Returns the socket file descriptor on success.
+    pub fn tcp_connect(&mut self, ip: [u8; 4], port: u16) -> Result<i32, erpc::Err<()>> {
+        let fd = self
+            .blocking_rpc(rpcs::LwipSocket {
+                domain: erpc::AF_INET,
+                socket_type: erpc::SOCK_STREAM,
+                protocol: 0,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if fd < 0 {
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        let addr = erpc::encode_sockaddr_in(ip, port);
+        let ret = self
+            .blocking_rpc(rpcs::LwipConnect {
+                socket: fd,
+                name: addr,
+            })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        if ret < 0 {
+            let _ = self.blocking_rpc(rpcs::LwipClose { socket: fd });
+            return Err(erpc::Err::RPCErr(()));
+        }
+
+        self.blocking_rpc(rpcs::LwipFcntl {
+            socket: fd,
+            cmd: erpc::F_SETFL,
+            val: erpc::O_NONBLOCK,
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))?;
+
+        Ok(fd)
+    }
+
+    /// Receive data from a connected TCP socket (non-blocking).
+    ///
+    /// Returns `Ok(Some(result))` with data if available,
+    /// `Ok(None)` if no data pending (EWOULDBLOCK).
+    pub fn tcp_recv(
+        &mut self,
+        socket: i32,
+    ) -> Result<Option<erpc::TcpRecvResult>, erpc::Err<()>> {
+        match self.blocking_rpc(rpcs::LwipRecv {
+            socket,
+            len: 256,
+            flags: erpc::MSG_DONTWAIT,
+            timeout_ms: 0,
+        }) {
+            Ok(result) => Ok(Some(result)),
+            Err(erpc::Err::RPCErr(_)) => Ok(None),
+            Err(e) => Err(match e {
+                erpc::Err::Parsing(p) => erpc::Err::Parsing(p),
+                erpc::Err::CRCMismatch => erpc::Err::CRCMismatch,
+                erpc::Err::TXErr => erpc::Err::TXErr,
+                erpc::Err::NotOurs => erpc::Err::NotOurs,
+                erpc::Err::ResponseOverrun => erpc::Err::ResponseOverrun,
+                _ => erpc::Err::Unknown,
+            }),
+        }
+    }
+
+    /// Send data on a connected TCP socket.
+    ///
+    /// Returns the number of bytes sent on success.
+    pub fn tcp_send(&mut self, socket: i32, data: &[u8]) -> Result<i32, erpc::Err<()>> {
+        self.blocking_rpc(rpcs::LwipSend {
+            socket,
+            data,
+            flags: 0,
+        })
+        .map_err(|_| erpc::Err::RPCErr(()))
+    }
+
+    /// Close a TCP socket.
+    pub fn tcp_close(&mut self, socket: i32) -> Result<(), erpc::Err<()>> {
+        self.blocking_rpc(rpcs::LwipClose { socket })
+            .map_err(|_| erpc::Err::RPCErr(()))?;
+        Ok(())
+    }
+
     /// Called from ISR: Handles the signal that the UART has recieved
     /// a byte that needs to be read.
     pub fn _handle_rx(&mut self) {

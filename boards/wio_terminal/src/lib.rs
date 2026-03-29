@@ -50,8 +50,9 @@ pub use wifi::{rpcs as wifi_rpcs, wifi_prelude, Wifi, WifiPins};
 pub mod wifi_types {
     pub use seeed_erpc::{
         BssType, IPInfo, L3Interface, Security, WifiMode, BSSID, SSID,
-        RecvResult, encode_sockaddr_in, decode_sockaddr_in,
-        AF_INET, SOCK_DGRAM, SOL_SOCKET, SO_REUSEADDR,
+        RecvResult, AcceptResult, TcpRecvResult,
+        encode_sockaddr_in, decode_sockaddr_in,
+        AF_INET, SOCK_STREAM, SOCK_DGRAM, SOL_SOCKET, SO_REUSEADDR,
         F_SETFL, O_NONBLOCK, MSG_DONTWAIT,
     };
 }
