@@ -105,7 +105,7 @@ mod boiler_implementation {
     use atsamd_hal::pac::dsu::length;
     use atsamd_hal::pac::gclk::genctrl::OeR;
     use atsamd_hal::pac::tcc0::per;
-    use atsamd_hal::pwm_wg::{PinoutCollapse, PwmBaseTrait, PwmWgFutureTrait};
+    use atsamd_hal::pwm_wg::{DmaPwmWaveform, PinoutCollapse, PwmWaveformGenerator};
     use atsamd_hal::timer_capture_waveform::{self, TimerCaptureData, TimerCaptureFutureTrait};
     use core::any::Any;
     use core::marker::PhantomData;
@@ -126,12 +126,12 @@ mod boiler_implementation {
         type Timer;
         type PinoutTx: PinoutCollapse<PinId = Self::PinTxId> + PinoutNewTrait<Self::PinTxId>;
         type PinoutRx: PinoutCollapse<PinId = Self::PinRxId> + PinoutNewTrait<Self::PinRxId>;
-        type PwmBase: PwmBaseTrait<
+        type PwmBase: PwmWaveformGenerator<
             TC = Self::Timer,
             Pinout = Self::PinoutTx,
-            ConvertibleToFuture<Self::DmaChannel> = Self::PwmWg,
+            WithDma<Self::DmaChannel> = Self::PwmWg,
         >;
-        type PwmWg: PwmWgFutureTrait<
+        type PwmWg: DmaPwmWaveform<
             DmaChannel = Self::DmaChannel,
             Pinout = Self::PinoutTx,
             TC = Self::Timer,
@@ -186,7 +186,7 @@ mod boiler_implementation {
             //  Enable clocks for capture timer
             PinoutSpecificData::TimerCaptureBase::enable_mclk_clocks(mclk);
 
-            let pwm_generator_future = PinoutSpecificData::PwmBase::new_waveform_generator(
+            let pwm_generator_future = PinoutSpecificData::PwmBase::new(
                 input_clock_frequency,
                 Hertz::from_raw(32),
                 tc_timer,
@@ -222,7 +222,7 @@ mod boiler_implementation {
         ) -> AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N> {
             let pwm_tx_pin = pin_tx.into_alternate::<E>();
 
-            let pwm_generator_future = PinoutSpecificData::PwmBase::new_waveform_generator(
+            let pwm_generator_future = PinoutSpecificData::PwmBase::new(
                 periph_clock_freq,
                 Hertz::from_raw(32),
                 tc_timer,
@@ -347,14 +347,15 @@ mod boiler_implementation {
                 Some(pwm) => {
                     //  let mut source: [u8; N] = [self.tx_init_duty_value; N];
                     //  TODO: Actually use the period to set the PWM frequency
-                    pwm.start_regular_pwm(self.tx_init_duty_value);
+                    pwm.set_idle_level(self.tx_init_duty_value);
                     let dma_future = self
                         .pwm
                         .as_mut()
                         .unwrap() /* TODO: remove runtime panic */
-                        .start_timer_prepare_dma_transfer::<N, INVERT_SIGNAL>(
+                        .send_waveform::<N>(
                             self.tx_init_duty_value,
                             iterator,
+                            INVERT_SIGNAL,
                         );
                     dma_future.await.map_err(|_| TriggerError::GenericError)
                 }
@@ -563,7 +564,7 @@ mod timer_data_set {
         },
         gpio::{E, PA16, PA17, PB08, PB09},
         pwm::{PinoutNewTrait, TC2Pinout, TC4Pinout},
-        pwm_wg::{PwmBaseTrait, PwmWg2, PwmWg4},
+        pwm_wg::{PwmWaveformGenerator, PwmWg2, PwmWg4},
         time::Hertz,
         timer_capture_waveform::{
             TimerCapture2, TimerCapture2Future, TimerCapture4, TimerCapture4Future,
