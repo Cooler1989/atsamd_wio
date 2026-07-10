@@ -387,6 +387,18 @@ pub trait TimerCaptureBaseTrait {
         //  timeout: MillisDurationU32,
     ) -> Self;
     fn enable_mclk_clocks(mclk: &mut Mclk);
+    /// Select which edge of the RX input the capture unit timestamps.
+    ///
+    /// * `false` – timestamp **rising** edges (`DRVCTRL.INVEN0` cleared, the
+    ///   reset default).
+    /// * `true`  – timestamp **falling** edges (`DRVCTRL.INVEN0` set): the
+    ///   input is inverted before the capture logic. Use this when the signal
+    ///   reaching the pin is inverted (e.g. an inverting OpenTherm bus adapter)
+    ///   so the captured edges still line up with the logical bus signal.
+    ///
+    /// Builder-style: returns `self`, so chain it between
+    /// [`Self::new_timer_capture`] and [`Self::with_dma_channel`].
+    fn set_capture_edge_inverted(self, inverted: bool) -> Self;
     fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
     where
         CH: AnyChannel<Status=ReadyFuture>;
@@ -451,6 +463,10 @@ impl<I: PinId> TimerCaptureBaseTrait for $TYPE<I> {
         //  timeout: MillisDurationU32,
     ) -> Self {
         Self::new_timer_capture(clock_freq, freq, tc, pinout, mclk)
+    }
+
+    fn set_capture_edge_inverted(self, inverted: bool) -> Self {
+        self.set_capture_edge_inverted(inverted)
     }
 
     fn with_dma_channel<CH>(self, channel: CH) -> Self::ConvertibleToFuture<CH>
@@ -660,8 +676,10 @@ impl<I: PinId> $TYPE<I> {
         // enable interrupt on the timeout side channel:
         count.intenset().modify(|_, w| w.mc1().set_bit() );
 
-        //  It is possible to set capture on falling edges by setting the INVEN bit.
-        // count.drvctrl().write(|w| w.inven0().set_bit());
+        //  Capture edge selection (rising vs falling) is applied separately via
+        //  `set_capture_edge_inverted()` right after construction; here we leave
+        //  `DRVCTRL.INVEN0` at its reset default (cleared = capture on rising
+        //  edge). See `set_capture_edge_inverted` / `CreatePwmPinout::INVERT_SIGNAL`.
 
         //  count.ccbuf(0).write(|w| unsafe { w.bits(0x00) });
         //  count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
@@ -683,6 +701,21 @@ impl<I: PinId> $TYPE<I> {
         //  let level = pin.is_high().unwrap();
         //  level
         self.pinout.read_level()
+    }
+
+    /// Set (`inverted = true`) or clear (`false`) the `DRVCTRL.INVEN0` bit,
+    /// switching the timer capture between falling and rising edges of the RX
+    /// input. See [`TimerCaptureBaseTrait::set_capture_edge_inverted`].
+    pub fn set_capture_edge_inverted(self, inverted: bool) -> Self {
+        let count = self.tc.count32();
+        count.drvctrl().modify(|_, w| {
+            if inverted {
+                w.inven0().set_bit()
+            } else {
+                w.inven0().clear_bit()
+            }
+        });
+        self
     }
 
     paste!{
