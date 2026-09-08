@@ -196,6 +196,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         invert: bool,
     ) -> Result<(), DmacError> {
         let mut generation_pattern_dma: [u8; N] = [self.init_level; N];
+        let mut pattern_len = DMA_PATTERN_OFFSET;
         for (idx, value) in generation_pattern_iter.enumerate() {
             // TODO: resolve the initial driver state — before the first TX it
             // is low instead of high.
@@ -207,7 +208,14 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
             // TODO: Implement configurable idle bus state level
             let level = if value { SIGNAL_HIGH } else { SIGNAL_LOW };
             generation_pattern_dma[idx] = level;
+            pattern_len = idx + 1;
         }
+
+        // Transfer only the populated waveform. Sending the whole fixed-size
+        // buffer leaves the TC in TX mode while it emits the unused idle tail,
+        // delaying RX re-arm and causing the next back-to-back request to be
+        // missed.
+        let pattern = &mut generation_pattern_dma[..pattern_len.min(N)];
 
         let count = self.base_pwm.tc.count8();
 
@@ -220,7 +228,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
 
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
         let dma_future = self.channel.as_mut().transfer_future(
-            &mut generation_pattern_dma,
+            pattern,
             pwm_dma_address,
             TriggerSource::$event,
             TriggerAction::Burst,

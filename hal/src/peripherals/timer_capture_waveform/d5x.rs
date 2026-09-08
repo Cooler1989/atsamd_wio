@@ -27,6 +27,11 @@ const TIMER_CHANNEL: usize = 0;
 //  Second channel may be used for timeout detection. CCx can thus be set to some value
 //  that will be compared with current value of the counter and trigger interrupt when the value matches.
 const TIMER_TIMEOUT_CHANNEL: usize = 1;
+//  OpenTherm allows a long wait for the first request, but once an edge has
+//  arrived the receiver should finish after a short idle gap. The TC compare
+//  is first armed with the active wait and then refreshed by the MC0 ISR.
+const CAPTURE_ACTIVE_WINDOW_MS: u32 = 20_000;
+const CAPTURE_INACTIVITY_MS: u32 = 5;
 
 #[hal_cfg("tc1-d11")]
 type RegBlock = pac::tc1::RegisterBlock;
@@ -166,34 +171,60 @@ impl<'a> AsMut<TimerCaptureRawData<'a>> for TimerCaptureRawResultAvailable<'a> {
 }
 
 impl<'a> TimerCaptureRawResultAvailable<'a> {
-    pub fn get_public_data<Container: iter::Extend<core::time::Duration>>(self, mut container: Container) -> TimerCaptureResultAvailable<Container> {
-        let adjust_ratio = |x| {(x as u64 * 4173*2) / 1000};  //  TODO: fix this by some ratio compund type
+    pub fn get_public_data<Container: iter::Extend<core::time::Duration>>(self, mut container: Container, max_items: usize) -> TimerCaptureResultAvailable<Container> {
+        let adjust_ratio = |x: u64| (x * 4173 * 2) / 1000; //  TODO: fix this by some ratio compund type
 
+        //  Convert the raw 32-bit edge-counter snapshots into inter-edge
+        //  Durations. The capture counter is a free-running 32-bit timer that
+        //  wraps at 2^32, so consecutive snapshots (and the termination value)
+        //  are NOT guaranteed to be strictly increasing. Use wrapping
+        //  subtraction so a single wrap is handled correctly. Previously a
+        //  non-increasing pair hit `todo!()` and HardFaulted the firmware,
+        //  which manifested as random crashes right after a frame (the counter
+        //  keeps running into the idle timeout) and much more often at higher
+        //  frame rates, where a wrap during the capture window is more likely.
+        //  Intervals longer than a full 32-bit period cannot be represented and
+        //  would alias, but those are far longer than any real OpenTherm gap.
         match self {
             TimerCaptureRawResultAvailable::DmaPollReady(data) => {
-                todo!()
+                let counter_value_at_termination = data.counter_at_termination;
+                if let Some(data) = data.data {
+                    let data_with_preceeding_zero = ExtendWithFirstZeroAndTerminationValueIterator::new(data, counter_value_at_termination);
+                    //  `take(max_items)` guards against a full DMA capture
+                    //  buffer: this iterator yields one Duration per edge PAIR,
+                    //  i.e. up to (samples + 1) items, which can exceed the
+                    //  fixed-capacity destination container and previously
+                    //  panicked inside heapless `Vec::extend` (push().unwrap()).
+                    //  Truncating the harmless tail is far better than a HardFault.
+                    container.extend(data_with_preceeding_zero.clone().
+                        zip(data_with_preceeding_zero.skip(1)).
+                        map(|(x, y)| {
+                            let delta = y.wrapping_sub(x);
+                            core::time::Duration::from_nanos(adjust_ratio(delta as u64))
+                        }
+                    ).take(max_items));
+                }
+                TimerCaptureResultAvailable::DmaPollReady(TimerCaptureData {
+                    data: container,
+                })
             }
             TimerCaptureRawResultAvailable::TimerTimeout(data) => {
                 let counter_value_at_termination = data.counter_at_termination;
                 if let Some(data) = data.data {
-                    //  container.extend(data.iter().map(|x| core::time::Duration::from_nanos(adjust_ratio(*x as u64))));
                     let data_with_preceeding_zero = ExtendWithFirstZeroAndTerminationValueIterator::new(data, counter_value_at_termination);
+                    //  See the DmaPollReady arm: cap the produced Durations to
+                    //  the container capacity so a full buffer never overflows.
                     container.extend(data_with_preceeding_zero.clone().
                         zip(data_with_preceeding_zero.skip(1)).
-                        map(|(x, y)|{
-                            if y > x {
-                                core::time::Duration::from_nanos(adjust_ratio(y as u64 - x as u64))
-                            } else {
-                                //  TODO: Better handling for errror here:
-                                todo!()
-                            }
+                        map(|(x, y)| {
+                            let delta = y.wrapping_sub(x);
+                            core::time::Duration::from_nanos(adjust_ratio(delta as u64))
                         }
-                    ));
-                    TimerCaptureResultAvailable::TimerTimeout(TimerCaptureData {
-                        data: container,
-                    })
+                    ).take(max_items));
                 }
-                else {todo!()}
+                TimerCaptureResultAvailable::TimerTimeout(TimerCaptureData {
+                    data: container,
+                })
             }
         }
     }
@@ -350,12 +381,89 @@ pub struct TimerCaptureInterruptHandler<T: TimerCaptureCapable> {
     _tc: core::marker::PhantomData<T>
 }
 
+/// EIC EXTINT0 handler for the SAMD51 TC2 event-input capture path.
+///
+/// In event-input mode the TC2 MC0 DMA request is generated by the capture
+/// event, but the TC MC0 interrupt flag is not a dependable interrupt source
+/// for refreshing the inactivity compare. EXTINT0 is the same filtered edge
+/// source feeding EVSYS, so use it to refresh TC2.CC1 instead.
+pub struct TimerCaptureEventInputInterruptHandler;
+
+impl typelevel::Sealed for TimerCaptureEventInputInterruptHandler {}
+impl Handler<crate::async_hal::interrupts::EIC_EXTINT_0>
+    for TimerCaptureEventInputInterruptHandler
+{
+    unsafe fn on_interrupt() {
+        let peripherals = unsafe { crate::pac::Peripherals::steal() };
+        let eic = &peripherals.eic;
+        if eic.intflag().read().bits() & 1 == 0 {
+            return;
+        }
+        eic.intflag().write(|w| unsafe { w.bits(1) });
+
+        let count = peripherals.tc2.count32();
+        let _ = count.ctrlbset().write(|w| w.cmd().readsync());
+        let current = count.count().read().bits();
+        let timeout_ticks = waker::CAPTURE_INACTIVITY_TICKS[2]
+            .load(atomic::Ordering::Relaxed);
+        count
+            .cc(1)
+            .write(|w| unsafe { w.bits(current.wrapping_add(timeout_ticks)) });
+        while count.syncbusy().read().cc1().bit_is_set() {}
+    }
+}
+
+/// EIC EXTINT8 handler for a TC4 event-input capture.
+pub struct TimerCaptureEventInputInterruptHandler8;
+
+impl typelevel::Sealed for TimerCaptureEventInputInterruptHandler8 {}
+impl Handler<crate::async_hal::interrupts::EIC_EXTINT_8>
+    for TimerCaptureEventInputInterruptHandler8
+{
+    unsafe fn on_interrupt() {
+        let peripherals = unsafe { crate::pac::Peripherals::steal() };
+        let eic = &peripherals.eic;
+        if eic.intflag().read().bits() & (1 << 8) == 0 {
+            return;
+        }
+        eic.intflag().write(|w| unsafe { w.bits(1 << 8) });
+
+        let count = peripherals.tc4.count32();
+        let _ = count.ctrlbset().write(|w| w.cmd().readsync());
+        let current = count.count().read().bits();
+        let timeout_ticks = waker::CAPTURE_INACTIVITY_TICKS[4]
+            .load(atomic::Ordering::Relaxed);
+        count
+            .cc(1)
+            .write(|w| unsafe { w.bits(current.wrapping_add(timeout_ticks)) });
+        while count.syncbusy().read().cc1().bit_is_set() {}
+    }
+}
+
 impl <T: TimerCaptureCapable> typelevel::Sealed for TimerCaptureInterruptHandler<T> {}
 impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHandler<T> {
     unsafe fn on_interrupt() {
         let periph = unsafe { crate::pac::Peripherals::steal() };
         let tc = T::reg_block(&periph);
+        let count = tc.count32();
         let intflag = &tc.count32().intflag();
+
+        // Each capture edge restarts the short inactivity deadline. Before
+        // the first edge CC1 contains the long active-capture deadline; after
+        // MC0, CC1 is moved relative to the current counter value so the DMA
+        // future completes shortly after the frame goes idle.
+        if intflag.read().mc0().bit_is_set() {
+            intflag.modify(|_, w| w.mc0().set_bit());
+            let _ = count.ctrlbset().write(|w| w.cmd().readsync());
+            let current = count.count().read().bits();
+            let timeout_ticks = waker::CAPTURE_INACTIVITY_TICKS
+                [T::WAKER_IDX]
+                .load(atomic::Ordering::Relaxed);
+            count
+                .cc(1)
+                .write(|w| unsafe { w.bits(current.wrapping_add(timeout_ticks)) });
+            while count.syncbusy().read().cc1().bit_is_set() {}
+        }
 
         //  Wake only on the compare match channel 1, which is used for the timeout detection.
         if intflag.read().mc1().bit_is_set() {
@@ -386,6 +494,15 @@ pub trait TimerCaptureBaseTrait {
         mclk: Option<&mut Mclk>,
         //  timeout: MillisDurationU32,
     ) -> Self;
+    /// Construct an RX capture driven by the TC event input (`EVCTRL.TCEI`)
+    /// rather than the TC's own pin, so the RX line can be routed through the
+    /// EIC (both-edge + glitch filter) and EVSYS. No capture pin is owned.
+    fn new_timer_capture_event_input(
+        clock_freq: Hertz,
+        freq: Hertz,
+        tc: Self::TC,
+        mclk: Option<&mut Mclk>,
+    ) -> Self;
     fn enable_mclk_clocks(mclk: &mut Mclk);
     /// Select which edge of the RX input the capture unit timestamps.
     ///
@@ -408,7 +525,7 @@ pub trait TimerCaptureFutureTrait {
     type DmaChannel;
     type TC;
     type Pinout: PinoutCollapse;
-    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
+    fn decompose(self) -> (Self::DmaChannel, Self::TC, Option<Self::Pinout>);
     //  fn start_regular_pwm(&mut self, ccx_value: u8);
     async fn start_timer_execute_dma_transfer<Container: iter::Extend<core::time::Duration>, const N: usize>(&mut self, timestamps_capture: Container)
         -> Result<TimerCaptureResultAvailable<Container>, TimerCaptureFailure>;
@@ -434,8 +551,10 @@ pub struct $TYPE<I: PinId> {
     /// Used to calculate the period of the pwm.
     clock_freq: Hertz,
     tc: crate::pac::$TC,
+    //  `None` in event-input mode: the RX edges arrive over the TC event input
+    //  (EVCTRL.TCEI) from the EIC/EVSYS, so the TC owns no capture pin.
     #[allow(dead_code)]
-    pinout: $pinout<I>,
+    pinout: Option<$pinout<I>>,
     //  _channel: Option<DmaCh>,
 }
 
@@ -463,6 +582,15 @@ impl<I: PinId> TimerCaptureBaseTrait for $TYPE<I> {
         //  timeout: MillisDurationU32,
     ) -> Self {
         Self::new_timer_capture(clock_freq, freq, tc, pinout, mclk)
+    }
+
+    fn new_timer_capture_event_input(
+        clock_freq: Hertz,
+        freq: Hertz,
+        tc: crate::pac::$TC,
+        mclk: Option<&mut Mclk>,
+    ) -> Self {
+        Self::new_timer_capture_event_input(clock_freq, freq, tc, mclk)
     }
 
     fn set_capture_edge_inverted(self, inverted: bool) -> Self {
@@ -540,8 +668,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
     type DmaChannel = DmaCh;
     type TC = crate::pac::$TC;
     type Pinout = $pinout<I>;
-    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout){
-        let $TYPE{clock_freq, tc, pinout} = self.base_pwm;
+    fn decompose(self) -> (Self::DmaChannel, Self::TC, Option<Self::Pinout>){
+        let $TYPE{clock_freq: _clock_freq, tc, pinout} = self.base_pwm;
         (self._channel, tc, pinout)
     }
     fn read_pin_level(&mut self) -> bool {
@@ -582,10 +710,16 @@ impl<I: PinId, DmaCh: AnyChannel<Status=ReadyFuture>> TimerCaptureFutureTrait fo
 
         if let Ok(mut result) = result {
             result.fill_the_capture_memory(&mut capture_memory);
-            Ok(result.get_public_data(capture_container))
+            //  Cap conversion output at the DMA buffer size `N`, which is also
+            //  the destination container's capacity, so a completely full
+            //  capture can never overflow the container (would HardFault).
+            Ok(result.get_public_data(capture_container, N))
         }else {
-            //  Err(TimerCaptureFailure::DmaFailed(DmacError::TransferError))
-            todo!()
+            //  A DMA transfer error must be surfaced to the caller as a
+            //  recoverable failure, not `todo!()` (which panics -> HardFault on
+            //  the target with no stack trace). The listen loop then reports it
+            //  as a capture error and simply tries the next frame.
+            Err(TimerCaptureFailure::DmaFailed(DmacError::TransferError))
         }
         //  type Output = Result<TimerCaptureResultAvailable<ContainerData>, TimerCaptureFailure>;
         //  Rest of the setup shall go into poll method: i.e. enabling interrupts and the counter
@@ -619,8 +753,38 @@ impl<I: PinId> $TYPE<I> {
         mclk: Option<&mut Mclk>,
         //  timeout: MillisDurationU32,
     ) -> Self {
-        //  TODO: Calculate the valuee of the compare match register:
-        let capture_comapre_value_timeout = 0x4000_0000_u32;
+        Self::new_timer_capture_inner(clock_freq, tc, Some(pinout), mclk, false)
+    }
+
+    /// Construct an RX capture that timestamps edges delivered on the TC event
+    /// input (`EVCTRL.TCEI`) instead of the TC's own pin. This lets the RX pin
+    /// be routed through the EIC (both-edge sense + glitch filter) and the event
+    /// system (EVSYS) into this timer, so the capture stream contains **both**
+    /// bus edges. No capture pin is owned by the TC in this mode.
+    pub fn new_timer_capture_event_input(
+        clock_freq: Hertz,
+        _freq: Hertz,
+        tc: crate::pac::$TC,
+        mclk: Option<&mut Mclk>,
+    ) -> Self {
+        Self::new_timer_capture_inner(clock_freq, tc, None, mclk, true)
+    }
+
+    fn new_timer_capture_inner(
+        clock_freq: Hertz,
+        tc: crate::pac::$TC,
+        pinout: Option<$pinout<I>>,
+        mclk: Option<&mut Mclk>,
+        event_input: bool,
+    ) -> Self {
+        //  CC1 starts with the long active-capture deadline. The MC0 interrupt
+        // changes it to the short inactivity deadline after the first edge.
+        let capture_compare_value_timeout =
+            clock_freq.to_Hz() / 1000 * CAPTURE_ACTIVE_WINDOW_MS;
+        waker::CAPTURE_INACTIVITY_TICKS[extract_number_macro!($TC)].store(
+            clock_freq.to_Hz() / 1000 * CAPTURE_INACTIVITY_MS,
+            atomic::Ordering::Relaxed,
+        );
         let count = tc.count32();
         //  let tc_ccbuf_dma_data_register_address = count.cc(TIMER_CHANNEL).as_ptr() as *const ();
         //  let TimerCaptureWaveformSourcePtr()(pub(in super::super) *mut T);
@@ -666,15 +830,31 @@ impl<I: PinId> $TYPE<I> {
             //      _ => unreachable!(),
             //  }
         });
-        //  TODO: Set capten0 and clear capten1.
-        count.ctrla().modify(|_, w| w.capten0().set_bit().copen0().set_bit());
+        if event_input {
+            count.ctrla().modify(|_, w| w.capten0().set_bit());
+        } else {
+            count
+                .ctrla()
+                .modify(|_, w| w.capten0().set_bit().copen0().set_bit());
+        }
 
         //  clear all interrupt flags:
         count.intflag().write(|w| w.mc1().set_bit().mc0().set_bit().ovf().set_bit().err().set_bit());
 
-        count.evctrl().write(|w| w.evact().stamp().mceo0().set_bit());
+        count.evctrl().write(|w| {
+            w.evact().stamp().mceo0().set_bit();
+            //  Event-input mode: capture on edges arriving via EVSYS (from the
+            //  EIC) rather than the TC's own pin. See `new_timer_capture_event_input`.
+            if event_input {
+                w.tcei().set_bit();
+            }
+            w
+        });
         // enable interrupt on the timeout side channel:
-        count.intenset().modify(|_, w| w.mc1().set_bit() );
+        // INTENSET is a write-one-to-set register; use a direct write so the
+        // capture (MC0) interrupt is enabled reliably as well as the timeout
+        // (MC1) interrupt.
+        count.intenset().write(|w| w.mc1().set_bit().mc0().set_bit());
 
         //  Capture edge selection (rising vs falling) is applied separately via
         //  `set_capture_edge_inverted()` right after construction; here we leave
@@ -685,7 +865,7 @@ impl<I: PinId> $TYPE<I> {
         //  count.ccbuf(1).write(|w| unsafe { w.bits(0x00) });
         count.cc(0).write(|w| unsafe { w.bits(0x00) });
         while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(capture_comapre_value_timeout) });
+        count.cc(1).write(|w| unsafe { w.bits(capture_compare_value_timeout) });
         while count.syncbusy().read().cc1().bit_is_set() {}
 
         Self {
@@ -696,11 +876,9 @@ impl<I: PinId> $TYPE<I> {
     }
 
     pub fn read_pin_level(&self) -> bool {
-        //  let pinout = self.pinout;
-        //  let pin = pinout.get_pin();
-        //  let level = pin.is_high().unwrap();
-        //  level
-        self.pinout.read_level()
+        //  In event-input mode there is no capture pin owned by the TC, so there
+        //  is no level to sample; report `false` (unused by the both-edge decoder).
+        self.pinout.as_ref().map(|p| p.read_level()).unwrap_or(false)
     }
 
     /// Set (`inverted = true`) or clear (`false`) the `DRVCTRL.INVEN0` bit,
@@ -838,7 +1016,7 @@ const MAX_TIMER_COUNT: usize = 8;
 
 #[cfg(feature = "async")]
 mod waker {
-    use core::sync::atomic::AtomicBool;
+    use core::sync::atomic::{AtomicBool, AtomicU32};
 
     use embassy_sync::waitqueue::AtomicWaker;
 
@@ -851,5 +1029,8 @@ mod waker {
     const NEW_INTERRUP_FIRED: AtomicBool = AtomicBool::new(false);
     pub(super) static MC1_INTERRUPT_FIRED: [AtomicBool; MAX_TIMER_COUNT] =
         [NEW_INTERRUP_FIRED; MAX_TIMER_COUNT];
+    const NEW_CAPTURE_INACTIVITY_TICKS: AtomicU32 = AtomicU32::new(0);
+    pub(super) static CAPTURE_INACTIVITY_TICKS: [AtomicU32; MAX_TIMER_COUNT] =
+        [NEW_CAPTURE_INACTIVITY_TICKS; MAX_TIMER_COUNT];
 }
 
