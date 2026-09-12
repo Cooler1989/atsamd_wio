@@ -60,6 +60,8 @@
 //! let (dma_ch, tc4, pinout) = pwm.decompose();
 //! ```
 
+use core::future::Future;
+
 use atsamd_hal_macros::hal_cfg;
 
 #[cfg(feature = "dma")]
@@ -85,9 +87,9 @@ const SIGNAL_HIGH: u8 = 0xFF;
 /// DMA pattern value for full-cycle low signal.
 const SIGNAL_LOW: u8 = 0x00;
 
-/// Offset into the DMA pattern buffer where bit encoding begins.
-/// The first entries are kept at idle level to allow the timer to settle.
-const DMA_PATTERN_OFFSET: usize = 2;
+/// Number of idle timer periods appended after a frame so the DMA returns the
+/// output to the bus idle level without a live compare-register write.
+const DMA_IDLE_TAIL: usize = 2;
 
 #[cfg(feature = "dma")]
 #[derive(Clone)]
@@ -127,9 +129,11 @@ pub trait DmaPwmWaveform {
 
     fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
     fn set_idle_level(&mut self, ccx_value: u8);
+    fn start_idle(&mut self);
     async fn send_waveform<const N: usize>(
         &mut self,
-        ccx_value: u8,
+        _ccx_value: u8,
+
         generation_pattern_iter: impl Iterator<Item = bool>,
         invert: bool,
     ) -> Result<(), DmacError>;
@@ -196,11 +200,11 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         invert: bool,
     ) -> Result<(), DmacError> {
         let mut generation_pattern_dma: [u8; N] = [self.init_level; N];
-        let mut pattern_len = DMA_PATTERN_OFFSET;
+        let mut pattern_len = 0;
         for (idx, value) in generation_pattern_iter.enumerate() {
             // TODO: resolve the initial driver state — before the first TX it
             // is low instead of high.
-            let idx = idx + DMA_PATTERN_OFFSET;
+            let idx = idx;
             if idx >= N {
                 break;
             }
@@ -211,35 +215,36 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
             pattern_len = idx + 1;
         }
 
+        // Leave two full timer periods at the configured idle level after the
+        // frame. This lets DMA return the waveform to idle at a cycle boundary
+        // without a live CC/CCBUF rewrite after the transfer completes.
+        pattern_len = pattern_len.saturating_add(DMA_IDLE_TAIL).min(N);
+
         // Transfer only the populated waveform. Sending the whole fixed-size
         // buffer leaves the TC in TX mode while it emits the unused idle tail,
         // delaying RX re-arm and causing the next back-to-back request to be
         // missed.
         let pattern = &mut generation_pattern_dma[..pattern_len.min(N)];
 
-        let count = self.base_pwm.tc.count8();
-
-        count.cc(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
-        while count.syncbusy().read().cc0().bit_is_set() {}
-        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
-        while count.syncbusy().read().cc1().bit_is_set() {}
-        count.ccbuf(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
-
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
-        let dma_future = self.channel.as_mut().transfer_future(
+        let mut dma_future = core::pin::pin!(self.channel.as_mut().transfer_future(
             pattern,
             pwm_dma_address,
             TriggerSource::$event,
             TriggerAction::Burst,
-        );
-        count.ctrla().modify(|_, w| w.enable().set_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
-
-        let result = dma_future.await;
-
-        count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
-        count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
+        ));
+        let mut timer_started = false;
+        let result = core::future::poll_fn(|cx| {
+            let dma_result = dma_future.as_mut().poll(cx);
+            if !timer_started {
+                // Arm DMA before the first PWM overflow. The counter starts at
+                // PER, so enabling TC first can lose the initial request.
+                self.base_pwm.start();
+                timer_started = true;
+            }
+            dma_result
+        })
+        .await;
 
         result
     }
@@ -248,23 +253,42 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         self.init_level = ccx_value;
         let count = self.base_pwm.tc.count8();
 
+        if count.ctrla().read().enable().bit_is_set() {
+            if count.cc(1).read().cc().bits() == ccx_value
+                && count.ccbuf(1).read().ccbuf().bits() == ccx_value
+            {
+                return;
+            }
+
+            // While running, update only the synchronized double buffer. The
+            // active CC1 value must not be rewritten mid-period because that
+            // can create an unsolicited output transition.
+            count.ccbuf(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
+            count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
+            return;
+        }
+
         count.cc(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
         while count.syncbusy().read().cc0().bit_is_set() {}
         count.cc(1).write(|w| unsafe { w.bits(ccx_value) });
         while count.syncbusy().read().cc1().bit_is_set() {}
-
         count.ccbuf(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
         count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
 
-        count.ctrla().modify(|_, w| w.enable().set_bit());
-        while count.syncbusy().read().enable().bit_is_set() {}
+        // The timer remains stopped until DMA is armed by send_waveform().
     }
 
     fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout) {
         let $TYPE { tc, pinout, .. } = self.base_pwm;
         (self.channel, tc, pinout)
     }
+
+    fn start_idle(&mut self) {
+        self.base_pwm.start();
+    }
+
 }
+
 
 /// Configures a TC peripheral in 8-bit NPWM mode for manchester signal
 /// generation.

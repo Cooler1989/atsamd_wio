@@ -610,6 +610,12 @@ where
         self.into_mode()
     }
 
+    /// Configure the pin for ownership by a peripheral function.
+    #[inline]
+    pub fn into_alternate_function<C: AlternateConfig>(self) -> Pin<I, Alternate<C>> {
+        self.into_alternate()
+    }
+
     /// Read the current drive strength of the pin.
     ///
     /// The drive strength is reset to normal on every change in pin mode.

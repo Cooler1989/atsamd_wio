@@ -63,12 +63,12 @@ macro_rules! impl_tc_pinout {
             type PinId = I;
             fn collapse(self) -> Pin<I, AlternateE> {
                 self._pin
-            } 
+            }
         }
 
         $(
             //  $( #[$attr] )?
-            //  impl $Type<$Id> {  // those are specializations similar to C++ template specializations 
+            //  impl $Type<$Id> {  // those are specializations similar to C++ template specializations
             //      #[inline]
             //      pub fn new_pin(pin: impl AnyPin<Id = $Id>) -> Self {
             //          let _pin = pin.into().into_alternate();
@@ -78,7 +78,7 @@ macro_rules! impl_tc_pinout {
 
 
             $( #[$attr] )?
-            impl PinoutNewTrait<$Id> for $Type<$Id> {  // those are specializations similar to C++ template specializations 
+            impl PinoutNewTrait<$Id> for $Type<$Id> {  // those are specializations similar to C++ template specializations
                 #[inline]
                 fn new_pin(pin: Pin<$Id, Alternate<E>>) -> Self {
                     Self { _pin: pin }
@@ -88,7 +88,7 @@ macro_rules! impl_tc_pinout {
 
             //  Where should this be implemented? TODO:
             //  $( #[$attr] )?
-            //  impl PinoutCollapse for $Type<$Id> {  // those are specializations similar to C++ template specializations 
+            //  impl PinoutCollapse for $Type<$Id> {  // those are specializations similar to C++ template specializations
             //      fn collapse(self) -> Pin<$Id, AlternateE> {
             //          self._pin
             //      }
