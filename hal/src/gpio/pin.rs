@@ -632,6 +632,18 @@ where
         self.regs.write_drive_strength(stronger);
     }
 
+    /// Preload the GPIO output latch without changing the pin mode.
+    #[inline]
+    pub fn set_output_high(&mut self) {
+        self.regs.write_pin(true);
+    }
+
+    /// Preload the GPIO output latch low without changing the pin mode.
+    #[inline]
+    pub fn set_output_low(&mut self) {
+        self.regs.write_pin(false);
+    }
+
     #[inline]
     pub(crate) fn _is_low(&self) -> bool {
         self.regs.read_pin() == false
