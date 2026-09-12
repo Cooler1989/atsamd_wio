@@ -44,7 +44,7 @@
 //! use atsamd_hal::pwm_wg::{PwmWaveformGenerator, DmaPwmWaveform, PwmWg4};
 //!
 //! // 1. Create the base generator (configures TC in NPWM mode)
-//! let pwm_base = PwmWg4::new(clock_freq, freq, tc4, pinout, Some(&mut mclk));
+//! let pwm_base = PwmWg4::new(clock_freq, freq, tc4, Some(&mut mclk));
 //!
 //! // 2. Attach a DMA channel
 //! let mut pwm = pwm_base.with_dma_channel(dma_ch);
@@ -54,10 +54,10 @@
 //!
 //! // 4. Send a waveform pattern (async)
 //! let pattern = [true, false, true, true, false].into_iter();
-//! pwm.send_waveform::<64>(0xFF, pattern, /* invert */ false).await?;
+//! pwm.send_waveform::<64>(0xFF, pattern, /* invert */ false, || {}).await?;
 //!
 //! // 5. Decompose to reclaim peripherals
-//! let (dma_ch, tc4, pinout) = pwm.decompose();
+//! let (dma_ch, tc4) = pwm.decompose();
 //! ```
 
 use core::future::Future;
@@ -125,9 +125,9 @@ pub use crate::pwm::PinoutCollapse;
 pub trait DmaPwmWaveform {
     type DmaChannel: AnyChannel<Status = ReadyFuture>;
     type TC;
-    type Pinout: PinoutCollapse;
 
-    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout);
+    fn stop(&mut self);
+    fn decompose(self) -> (Self::DmaChannel, Self::TC);
     fn set_idle_level(&mut self, ccx_value: u8);
     fn start_idle(&mut self);
     async fn send_waveform<const N: usize>(
@@ -136,6 +136,7 @@ pub trait DmaPwmWaveform {
 
         generation_pattern_iter: impl Iterator<Item = bool>,
         invert: bool,
+        after_timer_start: impl FnOnce(),
     ) -> Result<(), DmacError>;
 }
 
@@ -146,8 +147,7 @@ pub trait DmaPwmWaveform {
 #[cfg(all(feature = "dma", feature = "async"))]
 pub trait PwmWaveformGenerator {
     type TC;
-    type Pinout: PinoutCollapse;
-    type WithDma<D>: DmaPwmWaveform<TC = Self::TC, Pinout = Self::Pinout, DmaChannel = D>
+    type WithDma<D>: DmaPwmWaveform<TC = Self::TC, DmaChannel = D>
     where
         D: AnyChannel<Status = ReadyFuture>;
 
@@ -156,27 +156,25 @@ pub trait PwmWaveformGenerator {
         clock_freq: Hertz,
         freq: Hertz,
         tc: Self::TC,
-        pinout: Self::Pinout,
         mclk: Option<&mut Mclk>,
     ) -> Self;
 
     fn with_dma_channel<CH>(self, channel: CH) -> Self::WithDma<CH>
     where
         CH: AnyChannel<Status = ReadyFuture>;
+
+    fn start(&mut self);
 }
 macro_rules! pwm_wg {
     ($($TYPE:ident: ($TC:ident, $pinout:ident, $apmask:ident, $apbits:ident, $event:ident)),+) => {
         $(
-
-use crate::pwm::$pinout;
 
 pub struct $TYPE<I: PinId> {
     /// The frequency of the attached clock, not the period of the pwm.
     /// Used to calculate the period of the pwm.
     clock_freq: Hertz,
     tc: crate::pac::$TC,
-    #[allow(dead_code)]
-    pinout: $pinout<I>,
+    _pin: core::marker::PhantomData<I>,
 }
 
 paste! {
@@ -191,13 +189,13 @@ pub struct [<$TYPE Future>]<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> {
 impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TYPE Future>]<I, DmaCh> {
     type DmaChannel = DmaCh;
     type TC = crate::pac::$TC;
-    type Pinout = $pinout<I>;
 
     async fn send_waveform<const N: usize>(
         &mut self,
-        ccx_value: u8,
+        _ccx_value: u8,
         generation_pattern_iter: impl Iterator<Item = bool>,
         invert: bool,
+        after_timer_start: impl FnOnce(),
     ) -> Result<(), DmacError> {
         let mut generation_pattern_dma: [u8; N] = [self.init_level; N];
         let mut pattern_len = 0;
@@ -233,6 +231,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
             TriggerSource::$event,
             TriggerAction::Burst,
         ));
+        let mut after_timer_start = Some(after_timer_start);
         let mut timer_started = false;
         let result = core::future::poll_fn(|cx| {
             let dma_result = dma_future.as_mut().poll(cx);
@@ -240,6 +239,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
                 // Arm DMA before the first PWM overflow. The counter starts at
                 // PER, so enabling TC first can lose the initial request.
                 self.base_pwm.start();
+                after_timer_start.take().unwrap()();
                 timer_started = true;
             }
             dma_result
@@ -278,9 +278,15 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         // The timer remains stopped until DMA is armed by send_waveform().
     }
 
-    fn decompose(self) -> (Self::DmaChannel, Self::TC, Self::Pinout) {
-        let $TYPE { tc, pinout, .. } = self.base_pwm;
-        (self.channel, tc, pinout)
+    fn stop(&mut self) {
+        let count = self.base_pwm.tc.count8();
+        count.ctrla().modify(|_, w| w.enable().clear_bit());
+        while count.syncbusy().read().enable().bit_is_set() {}
+    }
+
+    fn decompose(self) -> (Self::DmaChannel, Self::TC) {
+        let $TYPE { tc, .. } = self.base_pwm;
+        (self.channel, tc)
     }
 
     fn start_idle(&mut self) {
@@ -299,7 +305,6 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
 #[cfg(all(feature = "dma", feature = "async"))]
 impl<I: PinId> PwmWaveformGenerator for $TYPE<I> {
     type TC = crate::pac::$TC;
-    type Pinout = $pinout<I>;
     type WithDma<D> = [<$TYPE Future>]<I, D> where
         D: AnyChannel<Status = ReadyFuture>;
 
@@ -307,7 +312,6 @@ impl<I: PinId> PwmWaveformGenerator for $TYPE<I> {
         clock_freq: Hertz,
         _freq: Hertz,
         tc: Self::TC,
-        pinout: Self::Pinout,
         mclk: Option<&mut Mclk>,
     ) -> Self {
         let count = tc.count8();
@@ -337,7 +341,7 @@ impl<I: PinId> PwmWaveformGenerator for $TYPE<I> {
         Self {
             clock_freq,
             tc,
-            pinout,
+            _pin: core::marker::PhantomData,
         }
     }
 
@@ -351,15 +355,15 @@ impl<I: PinId> PwmWaveformGenerator for $TYPE<I> {
             init_level: SIGNAL_LOW,
         }
     }
-}
 
-impl<I: PinId> $TYPE<I> {
-    pub fn start(&mut self) {
+    fn start(&mut self) {
         let count = self.tc.count8();
         count.ctrla().modify(|_, w| w.enable().set_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
     }
+}
 
+impl<I: PinId> $TYPE<I> {
     #[cfg(feature = "dma")]
     pub fn get_dma_ptr_from_tc(tc: crate::pac::$TC) -> PwmWaveformGeneratorPtr<u8> {
         PwmWaveformGeneratorPtr(tc.count8().ccbuf(1).as_ptr() as *mut _)

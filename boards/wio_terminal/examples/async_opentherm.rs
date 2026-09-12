@@ -124,16 +124,13 @@ mod boiler_implementation {
         type PinRx: AnyPin;
         type DmaChannel: dmac::AnyChannel<Status = ReadyFuture>;
         type Timer;
-        type PinoutTx: PinoutCollapse<PinId = Self::PinTxId> + PinoutNewTrait<Self::PinTxId>;
         type PinoutRx: PinoutCollapse<PinId = Self::PinRxId> + PinoutNewTrait<Self::PinRxId>;
         type PwmBase: PwmWaveformGenerator<
             TC = Self::Timer,
-            Pinout = Self::PinoutTx,
             WithDma<Self::DmaChannel> = Self::PwmWg,
         >;
         type PwmWg: DmaPwmWaveform<
             DmaChannel = Self::DmaChannel,
-            Pinout = Self::PinoutTx,
             TC = Self::Timer,
         >;
         type TimerCaptureBase: TimerCaptureBaseTrait<
@@ -156,6 +153,7 @@ mod boiler_implementation {
         const N: usize = VEC_SIZE_CAPTURE,
     > {
         tx_pin: Option<GpioPin<PinoutSpecificData::PinTxId, Output<PushPull>>>,
+        pwm_pin: Option<GpioPin<PinoutSpecificData::PinTxId, Alternate<E>>>,
         rx_pin: Option<GpioPin<PinoutSpecificData::PinRxId, Input<PullUp>>>,
 
         //  Pin<PB08, Output<PushPull>>`, found `TC4Pinout<PB09>``
@@ -190,13 +188,13 @@ mod boiler_implementation {
                 input_clock_frequency,
                 Hertz::from_raw(32),
                 tc_timer,
-                PinoutSpecificData::PinoutTx::new_pin(pwm_tx_pin),
                 Some(mclk),
             )
             .with_dma_channel(dma_channel);
 
             Self {
                 tx_pin: None,
+                pwm_pin: Some(pwm_tx_pin),
                 rx_pin: Some(pin_rx),
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: Some(pwm_generator_future),
@@ -226,13 +224,13 @@ mod boiler_implementation {
                 periph_clock_freq,
                 Hertz::from_raw(32),
                 tc_timer,
-                PinoutSpecificData::PinoutTx::new_pin(pwm_tx_pin),
                 None,
             )
             .with_dma_channel(dma_channel);
 
             Self {
                 tx_pin: None,
+                pwm_pin: Some(pwm_tx_pin),
                 rx_pin: Some(pin_rx),
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: Some(pwm_generator_future),
@@ -251,9 +249,10 @@ mod boiler_implementation {
     {
         type CaptureDevice = AtsamdEdgeTriggerCapture<PinoutSpecificData, OtRx, N>;
         fn transition_to_capture_capable_device(self) -> Self::CaptureDevice {
-            let pwm = self.pwm.unwrap();
-            let (dma, tc_timer, pinout) = pwm.decompose();
-            let pin_tx = pinout.collapse();
+            let mut pwm = self.pwm.unwrap();
+            pwm.stop();
+            let (dma, tc_timer) = pwm.decompose();
+            let pin_tx = self.pwm_pin.unwrap();
             let pin_tx = pin_tx.into_push_pull_output();
 
             AtsamdEdgeTriggerCapture::<PinoutSpecificData, OtRx, N>::new(
@@ -277,7 +276,6 @@ mod boiler_implementation {
         ) -> AtsamdEdgeTriggerCapture<PinoutSpecificData, OtTx, N> {
             let (pin_tx, capture_timer) = (self.tx_pin.unwrap(), self.capture_device.unwrap());
             let (dma, tc_timer, pinout_rx) = capture_timer.decompose();
-            //  let (dma, tc_timer, pinout) = pwm.decompose();
             let pin_rx = pinout_rx.collapse();
             let pin_rx = pin_rx.into_pull_up_input();
 
@@ -318,6 +316,7 @@ mod boiler_implementation {
 
             Self {
                 tx_pin: Some(pin_tx),
+                pwm_pin: None,
                 rx_pin: None,
                 tx_init_duty_value: 0xff, // This determines idle bus state level. TODO: add configuration
                 pwm: None,
@@ -581,7 +580,6 @@ mod timer_data_set {
         type PinRxId = PB08;
         type PinTx = Pin<Self::PinTxId, Output<PushPull>>;
         type PinRx = Pin<Self::PinRxId, Alternate<E>>;
-        type PinoutTx = TC4Pinout<Self::PinTxId>;
         type PinoutRx = TC4Pinout<Self::PinRxId>;
         type DmaChannel = dmac::Channel<dmac::Ch0, ReadyFuture>;
         type PwmWg = PwmWg4Future<Self::PinTxId, Self::DmaChannel>;
@@ -597,7 +595,6 @@ mod timer_data_set {
         type PinRxId = PA16;
         type PinTx = Pin<Self::PinTxId, Output<PushPull>>;
         type PinRx = Pin<Self::PinRxId, Alternate<E>>;
-        type PinoutTx = TC2Pinout<Self::PinTxId>;
         type PinoutRx = TC2Pinout<Self::PinRxId>;
         type DmaChannel = dmac::Channel<dmac::Ch1, ReadyFuture>;
         type PwmWg = PwmWg2Future<Self::PinTxId, Self::DmaChannel>;
