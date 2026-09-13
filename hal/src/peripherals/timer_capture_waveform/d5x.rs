@@ -1,9 +1,10 @@
+#![allow(non_snake_case)]
+
 /// Timer capture waveform driver for D5x series.
 /// TODO: Evaluate different TC mode: 48.6.2.8.2. Period and Pulse-Width (PPW/PWP) Capture Action on Events
 /// TODO: write documentation for the D5x timer capture waveform driver.
 
 
-#![allow(non_snake_case)]
 
 use core::future::Future;
 use core::sync::atomic;

@@ -116,6 +116,10 @@ const SIGNAL_LOW: u8 = 0x00;
 /// output to the bus idle level without a live compare-register write.
 const DMA_IDLE_TAIL: usize = 2;
 
+/// Number of idle timer periods emitted before the frame. This gives the
+/// PWM/alternate-function handoff time to settle before the first frame value.
+const DMA_IDLE_HEAD: usize = 4;
+
 #[cfg(feature = "dma")]
 #[derive(Clone)]
 pub struct PwmWaveformGeneratorPtr<T: Beat>(pub(in super::super) *mut T);
@@ -161,6 +165,7 @@ pub trait DmaPwmWaveform {
 
         generation_pattern_iter: impl Iterator<Item = bool>,
         invert: bool,
+        trace_pattern: impl FnOnce(&[u8], usize, usize, usize),
         after_timer_start: impl FnOnce(),
     ) -> Result<(), DmacError>;
 }
@@ -220,6 +225,7 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         _ccx_value: u8,
         generation_pattern_iter: impl Iterator<Item = bool>,
         invert: bool,
+        trace_pattern: impl FnOnce(&[u8], usize, usize, usize),
         after_timer_start: impl FnOnce(),
     ) -> Result<(), DmacError> {
         // Each byte is the CC1 value for one complete NPWM period. The
@@ -227,25 +233,37 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         // duty-cycle range: 0x00 means low and 0xFF means high for this timer's
         // TOP value of 233.
         let mut generation_pattern_dma: [u8; N] = [self.init_level; N];
-        let mut pattern_len = 0;
+        let frame_capacity = N.saturating_sub(DMA_IDLE_HEAD);
+        let mut frame_pattern_len = 0;
         for (idx, value) in generation_pattern_iter.enumerate() {
             // TODO: resolve the initial driver state — before the first TX it
             // is low instead of high.
             let idx = idx;
-            if idx >= N {
+            if idx >= frame_capacity {
                 break;
             }
             let value = value != invert;
             // TODO: Implement configurable idle bus state level
             let level = if value { SIGNAL_HIGH } else { SIGNAL_LOW };
-            generation_pattern_dma[idx] = level;
-            pattern_len = idx + 1;
+            generation_pattern_dma[DMA_IDLE_HEAD + idx] = level;
+            frame_pattern_len = idx + 1;
         }
 
         // Leave two full timer periods at the configured idle level after the
         // frame. This lets DMA return the waveform to idle at a cycle boundary
         // without a live CC/CCBUF rewrite after the transfer completes.
-        pattern_len = pattern_len.saturating_add(DMA_IDLE_TAIL).min(N);
+        let frame_end = DMA_IDLE_HEAD + frame_pattern_len;
+        let pattern_len = frame_end.saturating_add(DMA_IDLE_TAIL).min(N);
+
+        // The pattern is complete at this point, while TC2 is still stopped.
+        // Let the caller inspect the exact bytes that will be transferred,
+        // including the idle tail, before any timer activity begins.
+        trace_pattern(
+            &generation_pattern_dma,
+            frame_pattern_len,
+            pattern_len,
+            DMA_IDLE_HEAD,
+        );
 
         // Transfer only the populated waveform. Sending the whole fixed-size
         // buffer leaves the TC in TX mode while it emits the unused idle tail,
