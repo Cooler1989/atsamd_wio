@@ -18,6 +18,31 @@
 //! produces a bitstream at ~1 kHz per symbol — matching the OpenTherm
 //! Manchester encoding rate.
 //!
+//! ## NPWM timer model
+//!
+//! In NPWM mode the TC uses single-slope PWM. The counter counts upward from
+//! zero through `PER` and then wraps back to zero. `PER` is therefore the TOP
+//! value and determines the length of one PWM period. At the beginning of a
+//! period the waveform output is set; it is cleared when `COUNT == CCx`.
+//! Consequently, a compare value below TOP produces a high pulse followed by
+//! a low remainder of the period.
+//!
+//! This driver deliberately uses two compare values at the edges of the
+//! counter range instead of generating a variable duty cycle:
+//!
+//! - `CC1 = 0x00`: the compare occurs at the first count, so `WO[1]` is low
+//!   for the effective duration of the period.
+//! - `CC1 = 0xFF`: with `PER = 233`, the compare value is greater than TOP,
+//!   so no compare occurs while the counter is running and `WO[1]` stays high.
+//!
+//! The PWM frequency follows the datasheet equation
+//! `f_PWM = f_GCLK_TC / (N * (TOP + 1))`, where `N` is the prescaler. With the
+//! fixed `/256` prescaler and `TOP = 233`, this is
+//! `clock_freq / (256 * 234)`, which is about 1 kHz for a 60 MHz TC clock.
+//! DMA writes the next `CC1` value to `CCBUF1`; the TC's double-buffering makes
+//! that value take effect at a period boundary, giving one complete high or
+//! low NPWM period for every item in the DMA buffer.
+//!
 //! ## Architecture
 //!
 //! The module is organised around two traits and their macro-generated
@@ -197,6 +222,10 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         invert: bool,
         after_timer_start: impl FnOnce(),
     ) -> Result<(), DmacError> {
+        // Each byte is the CC1 value for one complete NPWM period. The
+        // waveform is binary, so values are chosen outside the middle of the
+        // duty-cycle range: 0x00 means low and 0xFF means high for this timer's
+        // TOP value of 233.
         let mut generation_pattern_dma: [u8; N] = [self.init_level; N];
         let mut pattern_len = 0;
         for (idx, value) in generation_pattern_iter.enumerate() {
@@ -224,6 +253,10 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         // missed.
         let pattern = &mut generation_pattern_dma[..pattern_len.min(N)];
 
+        // The DMAC destination is CCBUF1, not CC1. The TC transfers CCBUF1 to
+        // the active CC1 register at its synchronized update point, so DMA
+        // can select the next whole period without changing the output in the
+        // middle of the current period.
         let pwm_dma_address = self.base_pwm.get_dma_ptr();
         let mut dma_future = core::pin::pin!(self.channel.as_mut().transfer_future(
             pattern,
@@ -236,8 +269,9 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         let result = core::future::poll_fn(|cx| {
             let dma_result = dma_future.as_mut().poll(cx);
             if !timer_started {
-                // Arm DMA before the first PWM overflow. The counter starts at
-                // PER, so enabling TC first can lose the initial request.
+                // Arm DMA before the first PWM overflow. COUNT was preloaded
+                // with PER, so enabling the TC first can produce the initial
+                // overflow request before the destination is ready.
                 self.base_pwm.start();
                 after_timer_start.take().unwrap()();
                 timer_started = true;
@@ -263,6 +297,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
             // While running, update only the synchronized double buffer. The
             // active CC1 value must not be rewritten mid-period because that
             // can create an unsolicited output transition.
+            // At the next NPWM period boundary, CCBUF1 becomes CC1 and the new
+            // idle level then applies for complete periods.
             count.ccbuf(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
             count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
             return;
@@ -276,6 +312,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
         count.ccbuf(1).write(|w| unsafe { w.bits(ccx_value) });
 
         // The timer remains stopped until DMA is armed by send_waveform().
+        // This leaves the active and buffered compare values consistent before
+        // the first NPWM cycle starts.
     }
 
     fn stop(&mut self) {
@@ -290,6 +328,8 @@ impl<I: PinId, DmaCh: AnyChannel<Status = ReadyFuture>> DmaPwmWaveform for [<$TY
     }
 
     fn start_idle(&mut self) {
+        // With no DMA transfer in progress, the current buffered idle value is
+        // repeated by every NPWM period until the timer is stopped again.
         self.base_pwm.start();
     }
 
@@ -316,6 +356,9 @@ impl<I: PinId> PwmWaveformGenerator for $TYPE<I> {
     ) -> Self {
         let count = tc.count8();
 
+        // The TC peripheral clock must be enabled before any of its registers
+        // are accessed. The reset below also returns COUNT, PER, CCx and their
+        // synchronized buffers to a known state.
         if let Some(mclk) = mclk {
             mclk.$apmask().modify(|_, w| w.$apbits().set_bit());
         }
@@ -324,17 +367,28 @@ impl<I: PinId> PwmWaveformGenerator for $TYPE<I> {
         while count.ctrla().read().bits() & 1 != 0 {}
         count.ctrla().modify(|_, w| w.enable().clear_bit());
         while count.syncbusy().read().enable().bit_is_set() {}
+
+        // NPWM selects single-slope operation. In 8-bit mode COUNT can hold
+        // 0..=255, while PER is the TOP value used by the NPWM period formula.
         count.ctrla().modify(|_, w| w.mode().count8());
         count.ctrla().modify(|_, w| w.prescaler().div256());
 
+        // TOP = 233 gives 234 TC clock ticks per period. COUNT is preloaded
+        // with TOP so that, once the timer is started, the first overflow (and
+        // therefore the first DMA request) occurs immediately.
         count.count().write(|w| unsafe { w.bits(TIMER_PERIOD) });
         count.per().write(|w| unsafe { w.bits(TIMER_PERIOD) });
         count.perbuf().write(|w| unsafe { w.bits(TIMER_PERIOD) });
 
+        // NPWM is the datasheet's single-slope waveform generator. The output
+        // is set at the start of an up-count and cleared at COUNT == CCx.
         count.wave().write(|w| w.wavegen().npwm());
 
-        count.cc(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });
-        while count.syncbusy().read().cc0().bit_is_set() {}
+        // Initialize both compare outputs low/high at their respective
+        // extremes. The waveform output used by this driver is WO[1], whose
+        // active compare value will subsequently be supplied through CCBUF1.
+        count.cc(0).write(|w| unsafe { w.bits(SIGNAL_LOW) });  // Not used
+        while count.syncbusy().read().cc0().bit_is_set() {}  // Pin not used
         count.cc(1).write(|w| unsafe { w.bits(SIGNAL_HIGH) });
         while count.syncbusy().read().cc1().bit_is_set() {}
 
@@ -371,6 +425,9 @@ impl<I: PinId> $TYPE<I> {
 
     #[cfg(feature = "dma")]
     pub fn get_dma_ptr(&self) -> PwmWaveformGeneratorPtr<u8> {
+        // CCBUF1 is the peripheral-side, one-byte DMA destination. The pointer
+        // is non-incrementing because every DMA beat updates the same compare
+        // buffer; the TC then applies that value on its next update boundary.
         PwmWaveformGeneratorPtr(self.tc.count8().ccbuf(1).as_ptr() as *mut _)
     }
 
