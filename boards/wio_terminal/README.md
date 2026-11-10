@@ -39,6 +39,18 @@ this is conservative and based on low voltage sources.  58 MHz is used in the BS
 If you want to use the Wifi features of this crate, you must have updated the wifi core firmware to at least version `2.0.1`. You
 can read instructions for this process [here](https://wiki.seeedstudio.com/Wio-Terminal-Network-Overview/).
 
+`Wifi::connect_to_ap` checks the firmware's association and DHCP results
+before returning an IP address. Use `Wifi::connect_to_ap_detailed` to report
+the failing operation and firmware status or eRPC error. On the Seeed
+firmware, DHCP start waits for an address to be assigned; a fallback address
+after a DHCP failure is not treated as a successful connection. A valid DHCP
+lease ending in `.80` is still accepted. These calls use blocking eRPC and
+have no host-side response timeout.
+
+After an association failure, `Wifi::last_connection_error` retrieves the
+firmware's more specific last-error flag. The value is a diagnostic hint and
+should be read immediately after the failure; this eRPC is also blocking.
+
 ## Examples
 
 For information on building and flashing the examples to your device, as well as a list of all examples with brief explanations, please see the [examples README](examples/README.md).

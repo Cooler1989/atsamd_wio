@@ -19,6 +19,10 @@ use super::pins::aliases::*;
 
 use crate::WIFI_UART_BAUD;
 
+mod connect;
+mod diagnostics;
+pub use connect::{WifiConnectError, WifiConnectStage};
+
 /// The set of pins which are connected to the RTL8720 in some way
 pub struct WifiPins {
     pub pwr: WifiPwrReset,
@@ -50,6 +54,18 @@ pub type WifiUartPads = uart::Pads<Sercom0, WifiRx, WifiTx>;
 
 /// UART device for the labelled RX & TX pins
 pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
+
+impl connect::Transport for Wifi {
+    fn call<R: erpc::RPC>(&mut self, rpc: R) -> Result<R::ReturnValue, erpc::Err<R::Error>> {
+        self.blocking_rpc(rpc)
+    }
+}
+
+impl connect::DelayMs for Delay {
+    fn wait_ms(&mut self, ms: u8) {
+        self.delay_ms(ms);
+    }
+}
 
 impl Wifi {
     pub fn init(
@@ -115,8 +131,10 @@ impl Wifi {
         self.uart.enable_interrupts(uart::Flags::RXC);
     }
 
-    /// Convenience function to connection an access point with the given
-    /// network name and security parameters, and request an IP via DHCP.
+    /// Connects to an access point and requests an IP address via DHCP.
+    ///
+    /// Firmware failures are returned as `erpc::Err::RPCErr(())`. Use
+    /// [`Self::connect_to_ap_detailed`] to retain the operation and status.
     pub fn connect_to_ap<S: TryInto<heapless::String<64>>, P: TryInto<heapless::String<64>>>(
         &mut self,
         delay: &mut Delay,
@@ -124,34 +142,35 @@ impl Wifi {
         pw: P,
         security: erpc::Security,
     ) -> Result<erpc::IPInfo, erpc::Err<()>> {
-        self.blocking_rpc(rpcs::AdapterInit {})?;
-        self.blocking_rpc(rpcs::DHCPClientStop {
-            interface: erpc::L3Interface::Station,
-        })?;
-        self.blocking_rpc(rpcs::WifiOff {})?;
+        self.connect_to_ap_detailed(delay, ssid, pw, security)
+            .map_err(WifiConnectError::into_legacy)
+    }
 
-        delay.delay_ms(35u8);
+    /// Connects to an access point and requests an IP address via DHCP.
+    ///
+    /// Returns an error identifying the failed operation or firmware status.
+    /// The firmware's DHCP request blocks until a lease is assigned or it
+    /// fails. Like [`Self::blocking_rpc`], this method has no host-side timeout.
+    pub fn connect_to_ap_detailed<
+        S: TryInto<heapless::String<64>>,
+        P: TryInto<heapless::String<64>>,
+    >(
+        &mut self,
+        delay: &mut Delay,
+        ssid: S,
+        pw: P,
+        security: erpc::Security,
+    ) -> Result<erpc::IPInfo, WifiConnectError> {
+        connect::connect(self, delay, ssid, pw, security)
+    }
 
-        self.blocking_rpc(rpcs::WifiOn {
-            mode: erpc::WifiMode::Station,
-        })?;
-
-        self.blocking_rpc(rpcs::WifiConnect {
-            ssid: ssid.try_into().map_err(|_| erpc::Err::Unknown)?,
-            password: pw.try_into().map_err(|_| erpc::Err::Unknown)?,
-            security: security,
-            semaphore: 0,
-        })?;
-
-        self.blocking_rpc(rpcs::DHCPClientStart {
-            interface: erpc::L3Interface::Station,
-        })?;
-
-        delay.delay_ms(25u8);
-        self.blocking_rpc(rpcs::GetIPInfo {
-            interface: erpc::L3Interface::Station,
-        })
-        .map_err(|_| erpc::Err::RPCErr(()))
+    /// Returns the RTL8720's last connection-error flag.
+    ///
+    /// Read this immediately after an association failure; the firmware flag
+    /// is diagnostic and may not identify the exact cause. Like
+    /// [`Self::blocking_rpc`], this method has no host-side timeout.
+    pub fn last_connection_error(&mut self) -> Result<i32, erpc::Err<()>> {
+        self.blocking_rpc(diagnostics::GetLastError)
     }
 
     /// Create a non-blocking UDP socket bound to the given port.

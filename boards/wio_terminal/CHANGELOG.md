@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Check Wi-Fi association and DHCP firmware statuses before reporting a
+  successful connection, and reject an unspecified IP address.
+
+### Added
+
+- Add `Wifi::connect_to_ap_detailed` and connection error types for
+  operation-specific diagnostics while retaining the existing connection API.
+- Add `Wifi::last_connection_error` to retrieve the firmware's connection
+  diagnostic flag.
+
 ## [0.9.0](https://github.com/atsamd-rs/atsamd/compare/wio_terminal-0.8.0...wio_terminal-0.9.0) - 2025-07-06
 
 ### Dependencies

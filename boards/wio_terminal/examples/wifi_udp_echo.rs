@@ -127,19 +127,26 @@ fn main() -> ! {
     // ── Connect to AP ───────────────────────────────────────────────
     draw_text(&mut display, "Connecting...", Point::new(3, 30));
 
-    let ip_info = unsafe {
+    let connection = unsafe {
         WIFI.as_mut()
             .map(|wifi| {
-                wifi.connect_to_ap(
+                wifi.connect_to_ap_detailed(
                     &mut delay,
                     WIFI_SSID,
                     WIFI_PASS,
                     Security::WPA2_SECURITY | Security::AES_ENABLED,
                 )
-                .unwrap()
             })
             .unwrap()
     };
+    let ip_info = connection.unwrap_or_else(|error| {
+        clear(&mut display);
+        writeln!(textbuf, "WiFi connection failed:\n{}", error).unwrap();
+        draw_text(&mut display, textbuf.as_str(), Point::new(3, 30));
+        loop {
+            cortex_m::asm::wfi();
+        }
+    });
     user_led.set_high().ok();
 
     // ── Display IP info ─────────────────────────────────────────────
