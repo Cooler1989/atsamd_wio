@@ -51,6 +51,24 @@ After an association failure, `Wifi::last_connection_error` retrieves the
 firmware's more specific last-error flag. The value is a diagnostic hint and
 should be read immediately after the failure; this eRPC is also blocking.
 
+For cooperative executors, call `Wifi::into_async` after initialization and
+before enabling the blocking driver's interrupts. This consumes the driver
+and returns a task-owned `wifi_async::Client<WifiIo>` and a UART-owning
+`WifiInterrupts`. Keep the latter behind an interrupt-safe mutex, call its
+`enable` once, and route SERCOM0_0/SERCOM0_2 to `on_tx`/`on_rx`. Do not also use
+`wifi_singleton!` for this radio. The separate owners avoid mutable aliasing
+between tasks and interrupts.
+
+`Client::rpc` handles partial RX/TX, queue backpressure, frame bounds, CRC and
+reply sequences. Supply a `wait` closure that yields and returns `false` at
+the overall request deadline. It is called during transmission and reception,
+including unrelated callbacks. A timeout, malformed response or cancelled
+request poisons the client; reset the radio and initialize fresh queues before
+recovery. Complete RPC-specific error responses do not poison it. Existing
+blocking APIs and examples are unchanged. The async interrupt handlers latch
+RX overflow/UART errors and mask the failing interrupt; the client reports
+these as transport errors instead of panicking.
+
 ## Examples
 
 For information on building and flashing the examples to your device, as well as a list of all examples with brief explanations, please see the [examples README](examples/README.md).

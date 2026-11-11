@@ -45,8 +45,13 @@ pub use storage::*;
 #[cfg(feature = "wifi")]
 mod wifi;
 #[cfg(feature = "wifi")]
+#[path = "wifi/asynchronous.rs"]
+pub mod wifi_async;
+#[cfg(feature = "wifi")]
 pub use wifi::{
     rpcs as wifi_rpcs, wifi_prelude, Wifi, WifiConnectError, WifiConnectStage, WifiPins,
+    WifiIo, WifiInterrupts,
+    DHCP_ALREADY_STOPPED,
 };
 #[cfg(feature = "wifi")]
 pub mod wifi_types {

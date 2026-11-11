@@ -3,7 +3,7 @@ use core::fmt;
 use heapless::String;
 use seeed_erpc::{self as erpc, rpcs};
 
-const DHCP_ALREADY_STOPPED: i32 = 0x5005; // ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED
+pub const DHCP_ALREADY_STOPPED: i32 = 0x5005; // ESP_ERR_TCPIP_ADAPTER_DHCP_ALREADY_STOPPED
 
 /// A firmware operation performed while connecting to an access point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

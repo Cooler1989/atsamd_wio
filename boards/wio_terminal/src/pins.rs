@@ -535,6 +535,9 @@ pub struct Sets {
     pub wifi: WifiPins,
 
     pub header_pins: HeaderPins,
+
+    /// LEFT Grove connector, separate from the analog/header Grove connector.
+    pub grove: GrovePins,
 }
 
 impl Pins {
@@ -607,6 +610,10 @@ impl Pins {
             a7_d7: self.a7_d7,
             a8_d8: self.a8_d8,
         };
+        let grove = GrovePins {
+            scl: self.i2c1_scl,
+            sda: self.i2c1_sda,
+        };
 
         let buttons = ButtonPins {
             button1: self.button1,
@@ -645,8 +652,15 @@ impl Pins {
             buttons,
             wifi,
             header_pins,
+            grove,
         }
     }
+}
+
+/// LEFT Grove I2C/digital pins (BCM3/BCM2).
+pub struct GrovePins {
+    pub scl: atsamd_hal::gpio::Pin<atsamd_hal::gpio::PA16, atsamd_hal::gpio::Reset>,
+    pub sda: atsamd_hal::gpio::Pin<atsamd_hal::gpio::PA17, atsamd_hal::gpio::Reset>,
 }
 
 /// Other pins broken out to the RPi-compatible header.

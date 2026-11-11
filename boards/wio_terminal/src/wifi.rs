@@ -7,6 +7,7 @@ use atsamd_hal::{
     sercom::{uart, Sercom0},
 };
 use bbqueue::{self, BBBuffer, Consumer, Producer};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use cortex_m::interrupt::CriticalSection;
 use cortex_m::peripheral::NVIC;
@@ -21,7 +22,7 @@ use crate::WIFI_UART_BAUD;
 
 mod connect;
 mod diagnostics;
-pub use connect::{WifiConnectError, WifiConnectStage};
+pub use connect::{WifiConnectError, WifiConnectStage, DHCP_ALREADY_STOPPED};
 
 /// The set of pins which are connected to the RTL8720 in some way
 pub struct WifiPins {
@@ -55,6 +56,110 @@ pub type WifiUartPads = uart::Pads<Sercom0, WifiRx, WifiTx>;
 /// UART device for the labelled RX & TX pins
 pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
 
+// The board has one radio/UART. Latch ISR faults until its next initialization.
+static ASYNC_FAULT: AtomicU8 = AtomicU8::new(0);
+
+/// Task-owned queues; never aliases the interrupt-owned UART.
+pub struct WifiIo {
+    rx: Consumer<'static, 512>,
+    tx: Producer<'static, 128>,
+}
+
+/// Store behind an interrupt-safe mutex and call the handlers from SERCOM0.
+pub struct WifiInterrupts {
+    _pwr: WifiPwr,
+    uart: WifiUart,
+    rx: Producer<'static, 512>,
+    tx: Consumer<'static, 128>,
+}
+
+impl crate::wifi_async::ByteTransport for WifiIo {
+    fn try_write(&mut self, bytes: &[u8]) -> usize {
+        let count = bytes.len().min(64);
+        if count == 0 {
+            return 0;
+        }
+        let Ok(mut grant) = self.tx.grant_exact(count) else {
+            return 0;
+        };
+        grant.copy_from_slice(&bytes[..count]);
+        grant.commit(count);
+        NVIC::pend(interrupt::SERCOM0_0);
+        count
+    }
+
+    fn try_read(&mut self, bytes: &mut [u8]) -> usize {
+        let Ok(grant) = self.rx.read() else {
+            return 0;
+        };
+        let count = bytes.len().min(grant.len());
+        bytes[..count].copy_from_slice(&grant[..count]);
+        grant.release(count);
+        count
+    }
+
+    fn fault(&self) -> Option<crate::wifi_async::TransportError> {
+        match ASYNC_FAULT.load(Ordering::Relaxed) {
+            0 => None,
+            1 => Some(crate::wifi_async::TransportError::RxOverflow),
+            _ => Some(crate::wifi_async::TransportError::Uart),
+        }
+    }
+}
+
+impl WifiInterrupts {
+    pub fn enable(&mut self, _cs: &CriticalSection, nvic: &mut NVIC) {
+        unsafe {
+            nvic.set_priority(interrupt::SERCOM0_0, 1);
+            nvic.set_priority(interrupt::SERCOM0_2, 1);
+            NVIC::unmask(interrupt::SERCOM0_0);
+            NVIC::unmask(interrupt::SERCOM0_2);
+        }
+        self.uart.enable_interrupts(uart::Flags::RXC);
+    }
+
+    pub fn on_rx(&mut self) {
+        match self.uart.read() {
+            Ok(byte) => {
+                if let Ok(mut grant) = self.rx.grant_exact(1) {
+                    grant[0] = byte;
+                    grant.commit(1);
+                } else {
+                    ASYNC_FAULT.store(1, Ordering::Relaxed);
+                    self.uart.disable_interrupts(uart::Flags::RXC);
+                }
+            }
+            Err(nb::Error::WouldBlock) => {}
+            Err(nb::Error::Other(_)) => {
+                ASYNC_FAULT.store(2, Ordering::Relaxed);
+                self.uart.disable_interrupts(uart::Flags::RXC);
+            }
+        }
+    }
+
+    pub fn on_tx(&mut self) {
+        if ASYNC_FAULT.load(Ordering::Relaxed) != 0 {
+            self.uart.disable_interrupts(uart::Flags::DRE);
+            return;
+        }
+        if let Ok(grant) = self.tx.read() {
+            match self.uart.write(grant[0]) {
+                Ok(()) => grant.release(1),
+                Err(nb::Error::WouldBlock) => grant.release(0),
+                Err(nb::Error::Other(_)) => {
+                    grant.release(0);
+                    ASYNC_FAULT.store(2, Ordering::Relaxed);
+                    self.uart.disable_interrupts(uart::Flags::DRE);
+                    return;
+                }
+            }
+            self.uart.enable_interrupts(uart::Flags::DRE);
+        } else {
+            self.uart.disable_interrupts(uart::Flags::DRE);
+        }
+    }
+}
+
 impl connect::Transport for Wifi {
     fn call<R: erpc::RPC>(&mut self, rpc: R) -> Result<R::ReturnValue, erpc::Err<R::Error>> {
         self.blocking_rpc(rpc)
@@ -68,6 +173,24 @@ impl connect::DelayMs for Delay {
 }
 
 impl Wifi {
+    /// Consume an initialized, not-yet-enabled radio to separate task and ISR
+    /// ownership. Existing blocking APIs and singleton macros are unchanged.
+    pub fn into_async(self) -> (crate::wifi_async::Client<WifiIo>, WifiInterrupts) {
+        ASYNC_FAULT.store(0, Ordering::Relaxed);
+        (
+            crate::wifi_async::Client::new(WifiIo {
+                rx: self.rx_buff_input,
+                tx: self.tx_buff_input,
+            }),
+            WifiInterrupts {
+                _pwr: self._pwr,
+                uart: self.uart,
+                rx: self.rx_buff_isr,
+                tx: self.tx_buff_isr,
+            },
+        )
+    }
+
     pub fn init(
         pins: WifiPins,
         sercom0: Sercom0,
