@@ -36,6 +36,15 @@ pub enum Error<E> {
     Rpc(erpc::Err<E>),
 }
 
+impl<E> Error<E> {
+    /// The radio itself reported a failure (for example a non-blocking
+    /// `recv` with nothing pending). The reply was well formed and the client
+    /// stays usable; every other error poisons it.
+    pub fn is_radio_failure(&self) -> bool {
+        matches!(self, Error::Rpc(erpc::Err::RPCErr(_)))
+    }
+}
+
 /// Largest reply frame the client accepts.
 const REPLY_MAX: usize = 2048;
 

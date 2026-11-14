@@ -67,7 +67,7 @@ pub struct WifiIo {
 
 /// Store behind an interrupt-safe mutex and call the handlers from SERCOM0.
 pub struct WifiInterrupts {
-    _pwr: WifiPwr,
+    pwr: WifiPwr,
     uart: WifiUart,
     rx: Producer<'static, 512>,
     tx: Consumer<'static, 128>,
@@ -108,6 +108,31 @@ impl crate::wifi_async::ByteTransport for WifiIo {
 }
 
 impl WifiInterrupts {
+    /// Controls the radio power/reset pin while the UART remains owned by the
+    /// interrupt handler.
+    pub fn set_power(
+        &mut self,
+        enabled: bool,
+    ) -> Result<(), <WifiPwr as atsamd_hal::ehal::digital::ErrorType>::Error> {
+        if enabled {
+            OutputPin::set_high(&mut self.pwr)
+        } else {
+            OutputPin::set_low(&mut self.pwr)
+        }
+    }
+
+    /// Clears a latched UART/queue fault after a hardware radio reset.
+    pub fn reset_fault(&mut self) {
+        while let Ok(grant) = self.tx.read() {
+            let count = grant.len();
+            grant.release(count);
+        }
+        self.uart.flush_rx_buffer();
+        ASYNC_FAULT.store(0, Ordering::Relaxed);
+        self.uart
+            .enable_interrupts(uart::Flags::RXC | uart::Flags::DRE);
+    }
+
     pub fn enable(&mut self, _cs: &CriticalSection, nvic: &mut NVIC) {
         unsafe {
             nvic.set_priority(interrupt::SERCOM0_0, 1);
@@ -183,7 +208,7 @@ impl Wifi {
                 tx: self.tx_buff_input,
             }),
             WifiInterrupts {
-                _pwr: self._pwr,
+                pwr: self._pwr,
                 uart: self.uart,
                 rx: self.rx_buff_isr,
                 tx: self.tx_buff_isr,
