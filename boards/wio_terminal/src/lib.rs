@@ -50,7 +50,7 @@ pub mod wifi_async;
 #[cfg(feature = "wifi")]
 pub use wifi::{
     rpcs as wifi_rpcs, wifi_prelude, Wifi, WifiConnectError, WifiConnectStage, WifiPins,
-    WifiIo, WifiInterrupts,
+    WifiIo, WifiInterrupts, last_uart_error as wifi_last_uart_error,
     DHCP_ALREADY_STOPPED,
 };
 #[cfg(feature = "wifi")]

@@ -1,17 +1,15 @@
-use core::marker::PhantomData;
-
 use atsamd_hal::{
-    clock::{GenericClockController, Sercom6CoreClock},
+    clock::GenericClockController,
     delay::Delay,
+    ehal::delay::DelayNs,
     pac::{Mclk, Qspi},
     prelude::*,
     qspi,
     sercom::{spi, Sercom6},
     time::Hertz,
-    typelevel::NoneT,
 };
 use embedded_hal_bus::spi::{ExclusiveDevice, NoDelay};
-use embedded_sdmmc::{SdCard, TimeSource, Timestamp, VolumeIdx, VolumeManager};
+use embedded_sdmmc::{TimeSource, VolumeManager};
 
 use super::pins::aliases::*;
 
@@ -73,7 +71,6 @@ type Controller<TS> = embedded_sdmmc::VolumeManager<
 /// An initialized SPI SDMMC controller.
 pub struct SDCardController<TS: TimeSource> {
     pub volume: Controller<TS>,
-    sercom6_clk: Sercom6CoreClock,
 }
 
 impl<TS: TimeSource> core::ops::Deref for SDCardController<TS> {
@@ -90,7 +87,39 @@ impl<TS: TimeSource> core::ops::DerefMut for SDCardController<TS> {
     }
 }
 
+/// SD card on SPI, card not yet initialised. `D` is the delay used by
+/// `embedded_sdmmc` for its init and command timeouts.
+pub type SdDevice<D> = embedded_sdmmc::SdCard<ExclusiveDevice<SdSpi, SdCs, NoDelay>, D>;
+
 impl SDCard {
+    /// Sets up SERCOM6 as an SPI master at 400 kHz (the speed a card must be
+    /// initialised at) and wraps it in an [`embedded_sdmmc::SdCard`]. Nothing
+    /// is sent to the card yet. Returns the card-detect pin as well.
+    ///
+    /// Unlike [`SDCard::init`] this takes any [`DelayNs`], so it does not
+    /// need `hal::delay::Delay` (which consumes SysTick).
+    pub fn into_device<D: DelayNs>(
+        self,
+        clocks: &mut GenericClockController,
+        sercom6: Sercom6,
+        mclk: &mut Mclk,
+        delay: D,
+    ) -> Result<(SdDevice<D>, SdDet), ()> {
+        let gclk0 = clocks.gclk0();
+        let sercom6_clk = clocks.sercom6_core(&gclk0).ok_or(())?;
+        let pads = spi::Pads::default()
+            .data_out(self.mosi)
+            .data_in(self.miso)
+            .sclk(self.sck);
+        let bus = spi::Config::new(mclk, sercom6, pads, sercom6_clk.freq())
+            .spi_mode(spi::MODE_0)
+            .baud(400.kHz())
+            .enable();
+        let device = ExclusiveDevice::new_no_delay(bus, self.cs.into_push_pull_output())
+            .map_err(|_| ())?;
+        Ok((embedded_sdmmc::SdCard::new(device, delay), self.det.into()))
+    }
+
     /// Initialize the controller and its corresponding SPI bus peripheral.
     /// It is suggested to set higher buad rates after initialization, but it is
     /// for now left as the user responsibility.
@@ -102,31 +131,17 @@ impl SDCard {
         delay: Delay,
         ts: TS,
     ) -> Result<(SDCardController<TS>, SdDet), ()> {
-        let gclk0 = clocks.gclk0();
-        let sercom6_clk = clocks.sercom6_core(&gclk0).ok_or(())?;
-        let pads = spi::Pads::default()
-            .data_out(self.mosi)
-            .data_in(self.miso)
-            .sclk(self.sck);
-        let sdmmc_spi_bus = spi::Config::new(mclk, sercom6, pads, sercom6_clk.freq())
-            .spi_mode(spi::MODE_0)
-            .baud(400.kHz())
-            .enable();
-        let sdmmc_cs = self.cs.into_push_pull_output();
-
-        let sdmmc_spi = ExclusiveDevice::new_no_delay(sdmmc_spi_bus, sdmmc_cs)
-            .expect("Failed to create SpiDevice");
-
-        let card = embedded_sdmmc::SdCard::new(sdmmc_spi, delay);
-
-        let mut volume_mgr = VolumeManager::new(card, ts);
-
+        let (card, det) = self.into_device(clocks, sercom6, mclk, delay)?;
         Ok((
             SDCardController {
-                volume: volume_mgr,
-                sercom6_clk,
+                volume: VolumeManager::new(card, ts),
             },
-            self.det.into(),
+            det,
         ))
     }
+}
+
+/// Changes the SPI clock of `card`; call after the card answered at 400 kHz.
+pub fn sd_set_baud<D: DelayNs>(card: &SdDevice<D>, baud: Hertz) {
+    card.spi(|device| device.bus_mut().reconfigure(|config| config.set_baud(baud)));
 }

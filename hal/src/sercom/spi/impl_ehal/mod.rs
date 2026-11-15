@@ -163,8 +163,12 @@ where
             }
         }
 
-        // Reenable receiver only if necessary
+        // Reenable receiver only if necessary, and only after the last word
+        // has left the shift register: enabling it earlier receives the
+        // word(s) still being sent, and every later read is off by one (an SD
+        // card then fails with BUFOVF overruns after a few transfers).
         if D::RX_ENABLE {
+            self.flush_tx();
             self.config.as_mut().regs.rx_enable();
         }
         Ok(())

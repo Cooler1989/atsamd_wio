@@ -58,6 +58,22 @@ pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
 
 // The board has one radio/UART. Latch ISR faults until its next initialization.
 static ASYNC_FAULT: AtomicU8 = AtomicU8::new(0);
+/// Kind of the last UART error seen by the interrupt handlers (kept across
+/// `reset_fault`, for diagnostics): 0 none, 1 RX overflow, 2 frame, 3 parity,
+/// 4 other RX error, 5 TX error.
+static LAST_UART_ERROR: AtomicU8 = AtomicU8::new(0);
+
+/// Text for the last UART error the radio interrupt handlers latched.
+pub fn last_uart_error() -> &'static str {
+    match LAST_UART_ERROR.load(Ordering::Relaxed) {
+        0 => "UART",
+        1 => "UART overflow",
+        2 => "UART frame",
+        3 => "UART parity",
+        4 => "UART rx",
+        _ => "UART tx",
+    }
+}
 
 /// Task-owned queues; never aliases the interrupt-owned UART.
 pub struct WifiIo {
@@ -143,23 +159,52 @@ impl WifiInterrupts {
         self.uart.enable_interrupts(uart::Flags::RXC);
     }
 
+    /// Drains every byte the receiver holds under one queue grant. At 3 Mbaud
+    /// a byte arrives every 3.3 µs; one interrupt (and grant) per byte left
+    /// so little slack that any other short interrupt or critical section
+    /// overran the SERCOM receiver during bulk transfers.
     pub fn on_rx(&mut self) {
-        match self.uart.read() {
-            Ok(byte) => {
-                if let Ok(mut grant) = self.rx.grant_exact(1) {
-                    grant[0] = byte;
-                    grant.commit(1);
-                } else {
+        let Ok(mut grant) = self.rx.grant_max_remaining(32) else {
+            // Queue full: a waiting byte would be lost.
+            match self.uart.read() {
+                Ok(_) => {
                     ASYNC_FAULT.store(1, Ordering::Relaxed);
                     self.uart.disable_interrupts(uart::Flags::RXC);
                 }
+                Err(nb::Error::WouldBlock) => {}
+                Err(nb::Error::Other(error)) => self.rx_error(error),
             }
-            Err(nb::Error::WouldBlock) => {}
-            Err(nb::Error::Other(_)) => {
-                ASYNC_FAULT.store(2, Ordering::Relaxed);
-                self.uart.disable_interrupts(uart::Flags::RXC);
+            return;
+        };
+        let mut count = 0;
+        while count < grant.len() {
+            match self.uart.read() {
+                Ok(byte) => {
+                    grant[count] = byte;
+                    count += 1;
+                }
+                Err(nb::Error::WouldBlock) => break,
+                Err(nb::Error::Other(error)) => {
+                    grant.commit(count);
+                    self.rx_error(error);
+                    return;
+                }
             }
         }
+        // Bytes beyond the grant keep RXC set and re-enter the handler.
+        grant.commit(count);
+    }
+
+    fn rx_error(&mut self, error: uart::Error) {
+        let kind = match error {
+            uart::Error::Overflow => 1,
+            uart::Error::FrameError => 2,
+            uart::Error::ParityError => 3,
+            _ => 4,
+        };
+        LAST_UART_ERROR.store(kind, Ordering::Relaxed);
+        ASYNC_FAULT.store(2, Ordering::Relaxed);
+        self.uart.disable_interrupts(uart::Flags::RXC);
     }
 
     pub fn on_tx(&mut self) {
@@ -173,6 +218,7 @@ impl WifiInterrupts {
                 Err(nb::Error::WouldBlock) => grant.release(0),
                 Err(nb::Error::Other(_)) => {
                     grant.release(0);
+                    LAST_UART_ERROR.store(5, Ordering::Relaxed);
                     ASYNC_FAULT.store(2, Ordering::Relaxed);
                     self.uart.disable_interrupts(uart::Flags::DRE);
                     return;
