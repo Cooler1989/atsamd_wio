@@ -458,7 +458,19 @@ impl <T: TimerCaptureCapable> Handler<T::Interrupt> for TimerCaptureInterruptHan
         // the first edge CC1 contains the long active-capture deadline; after
         // MC0, CC1 is moved relative to the current counter value so the DMA
         // future completes shortly after the frame goes idle.
-        if intflag.read().mc0().bit_is_set() {
+        //
+        // MC0 cannot be relied on here: in capture operation reading CC0
+        // clears it (datasheet, TC INTFLAG), and the DMA reads CC0 for every
+        // captured edge, usually before this handler runs. The NVIC interrupt
+        // is enabled only while a capture is armed, with MC0 and MC1 as the
+        // only enabled sources, so an entry without MC1 is a capture edge
+        // whether or not MC0 is still set. Without this, every receive ran to
+        // the 20 s active window (one request per ~21 s on the boiler bus).
+        // TC4/TC2 are shared with the PWM waveform generator (TX), where CC1
+        // holds the output duty: never touch CC1 unless the TC is capturing.
+        let capturing = count.ctrla().read().capten0().bit_is_set();
+        let flags = intflag.read();
+        if capturing && (flags.mc0().bit_is_set() || flags.mc1().bit_is_clear()) {
             intflag.modify(|_, w| w.mc0().set_bit());
             let _ = count.ctrlbset().write(|w| w.cmd().readsync());
             let current = count.count().read().bits();
