@@ -2,16 +2,30 @@ use atsamd_hal::{
     clock::GenericClockController,
     delay::Delay,
     ehal::digital::OutputPin,
-    pac::{interrupt, Mclk},
+    pac::Mclk,
     prelude::*,
     sercom::{uart, Sercom0},
 };
-use bbqueue::{self, BBBuffer, Consumer, Producer};
+#[cfg(not(feature = "wifi-dma"))]
+use atsamd_hal::pac::interrupt;
+#[cfg(not(feature = "wifi-dma"))]
+use bbqueue::{BBBuffer, Consumer, Producer};
+#[cfg(not(feature = "wifi-dma"))]
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use cortex_m::interrupt::CriticalSection;
 use cortex_m::peripheral::NVIC;
-use nb;
+
+#[cfg(not(feature = "wifi-dma"))]
+mod irq;
+#[cfg(not(feature = "wifi-dma"))]
+use irq::Transport;
+#[cfg(feature = "wifi-dma")]
+mod dma;
+#[cfg(feature = "wifi-dma")]
+use dma::Transport;
+#[cfg(feature = "wifi-dma")]
+pub use dma::{_handle_dma_rx_wrap, WifiRxChannel, WifiTxChannel, RX_RING_LEN};
 
 pub use erpc::rpcs;
 use seeed_erpc as erpc;
@@ -40,15 +54,36 @@ pub struct WifiPins {
 /// eRPC-based protocol to the RTL8720 chip
 pub struct Wifi {
     _pwr: WifiPwr,
-    uart: WifiUart,
-
-    rx_buff_isr: Producer<'static, 512>,
-    rx_buff_input: Consumer<'static, 512>,
-    tx_buff_isr: Consumer<'static, 128>,
-    tx_buff_input: Producer<'static, 128>,
-
+    transport: Transport,
     sequence: u32,
 }
+
+/// Errors reported by a wifi transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportError {
+    /// The UART reported an overflow or framing error, or received bytes had
+    /// to be dropped because the receive buffer was full.
+    Rx,
+    /// The request could not be sent.
+    Tx,
+    /// Nothing arrived within the read budget (see [`REPLY_WAIT_BUDGET`] and
+    /// [`INTER_BYTE_BUDGET`]).
+    Timeout,
+}
+
+// Read timeouts, counted in polling iterations because the transport owns no
+// timer. One iteration is roughly 50 CPU cycles (estimate, not calibrated),
+// so at 120 MHz:
+
+/// Wait for the first byte of a reply: about 10 s. Long enough for the
+/// slowest RPC (`WifiConnect` blocks on the RTL8720 until it has associated),
+/// short enough that a silent RTL8720 cannot hang the caller forever.
+pub const REPLY_WAIT_BUDGET: u32 = 24_000_000;
+
+/// Wait between bytes once a reply has started: about 10 ms. The RTL8720
+/// sends a frame back to back (16 us per byte), so a longer gap means bytes
+/// were lost and the frame will never complete.
+pub const INTER_BYTE_BUDGET: u32 = 24_000;
 
 /// UART pads for the labelled RX & TX pins
 pub type WifiUartPads = uart::Pads<Sercom0, WifiRx, WifiTx>;
@@ -56,14 +91,21 @@ pub type WifiUartPads = uart::Pads<Sercom0, WifiRx, WifiTx>;
 /// UART device for the labelled RX & TX pins
 pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
 
+// The async split (`Wifi::into_async`, `WifiIo`, `WifiInterrupts`) drives the
+// UART from the SERCOM0 interrupts, so it is only available on the interrupt
+// transport, not with `wifi-dma`.
+
 // The board has one radio/UART. Latch ISR faults until its next initialization.
+#[cfg(not(feature = "wifi-dma"))]
 static ASYNC_FAULT: AtomicU8 = AtomicU8::new(0);
 /// Kind of the last UART error seen by the interrupt handlers (kept across
 /// `reset_fault`, for diagnostics): 0 none, 1 RX overflow, 2 frame, 3 parity,
 /// 4 other RX error, 5 TX error.
+#[cfg(not(feature = "wifi-dma"))]
 static LAST_UART_ERROR: AtomicU8 = AtomicU8::new(0);
 
 /// Text for the last UART error the radio interrupt handlers latched.
+#[cfg(not(feature = "wifi-dma"))]
 pub fn last_uart_error() -> &'static str {
     match LAST_UART_ERROR.load(Ordering::Relaxed) {
         0 => "UART",
@@ -76,12 +118,14 @@ pub fn last_uart_error() -> &'static str {
 }
 
 /// Task-owned queues; never aliases the interrupt-owned UART.
+#[cfg(not(feature = "wifi-dma"))]
 pub struct WifiIo {
     rx: Consumer<'static, 512>,
     tx: Producer<'static, 128>,
 }
 
 /// Store behind an interrupt-safe mutex and call the handlers from SERCOM0.
+#[cfg(not(feature = "wifi-dma"))]
 pub struct WifiInterrupts {
     pwr: WifiPwr,
     uart: WifiUart,
@@ -89,6 +133,7 @@ pub struct WifiInterrupts {
     tx: Consumer<'static, 128>,
 }
 
+#[cfg(not(feature = "wifi-dma"))]
 impl crate::wifi_async::ByteTransport for WifiIo {
     fn try_write(&mut self, bytes: &[u8]) -> usize {
         let count = bytes.len().min(64);
@@ -123,6 +168,7 @@ impl crate::wifi_async::ByteTransport for WifiIo {
     }
 }
 
+#[cfg(not(feature = "wifi-dma"))]
 impl WifiInterrupts {
     /// Controls the radio power/reset pin while the UART remains owned by the
     /// interrupt handler.
@@ -246,31 +292,32 @@ impl connect::DelayMs for Delay {
 impl Wifi {
     /// Consume an initialized, not-yet-enabled radio to separate task and ISR
     /// ownership. Existing blocking APIs and singleton macros are unchanged.
+    #[cfg(not(feature = "wifi-dma"))]
     pub fn into_async(self) -> (crate::wifi_async::Client<WifiIo>, WifiInterrupts) {
         ASYNC_FAULT.store(0, Ordering::Relaxed);
+        let parts = self.transport.into_parts();
         (
             crate::wifi_async::Client::new(WifiIo {
-                rx: self.rx_buff_input,
-                tx: self.tx_buff_input,
+                rx: parts.rx_buff_input,
+                tx: parts.tx_buff_input,
             }),
             WifiInterrupts {
                 pwr: self._pwr,
-                uart: self.uart,
-                rx: self.rx_buff_isr,
-                tx: self.tx_buff_isr,
+                uart: parts.uart,
+                rx: parts.rx_buff_isr,
+                tx: parts.tx_buff_isr,
             },
         )
     }
 
-    pub fn init(
+    /// Builds the UART and power-cycles the RTL8720.
+    fn start_uart(
         pins: WifiPins,
         sercom0: Sercom0,
         clocks: &mut GenericClockController,
         mclk: &mut Mclk,
         delay: &mut Delay,
-        rx_buff: &'static BBBuffer<512>,
-        tx_buff: &'static BBBuffer<128>,
-    ) -> Wifi {
+    ) -> (WifiPwr, WifiUart) {
         let gclk0 = clocks.gclk0();
 
         let pads = uart::Pads::default().rx(pins.miso).tx(pins.mosi);
@@ -294,20 +341,44 @@ impl Wifi {
         OutputPin::set_high(&mut pwr).ok();
         delay.delay_ms(200u8);
 
-        let (rx_buff_isr, rx_buff_input) = rx_buff.try_split().unwrap();
-        let (tx_buff_input, tx_buff_isr) = tx_buff.try_split().unwrap();
+        (pwr, uart.enable())
+    }
 
-        let sequence = 0;
-
-        let uart = uart.enable();
+    #[cfg(not(feature = "wifi-dma"))]
+    pub fn init(
+        pins: WifiPins,
+        sercom0: Sercom0,
+        clocks: &mut GenericClockController,
+        mclk: &mut Mclk,
+        delay: &mut Delay,
+        rx_buff: &'static BBBuffer<512>,
+        tx_buff: &'static BBBuffer<128>,
+    ) -> Wifi {
+        let (pwr, uart) = Self::start_uart(pins, sercom0, clocks, mclk, delay);
         Wifi {
             _pwr: pwr,
-            uart,
-            rx_buff_isr,
-            rx_buff_input,
-            tx_buff_isr,
-            tx_buff_input,
-            sequence,
+            transport: Transport::new(uart, rx_buff, tx_buff),
+            sequence: 0,
+        }
+    }
+
+    #[cfg(feature = "wifi-dma")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn init(
+        pins: WifiPins,
+        sercom0: Sercom0,
+        clocks: &mut GenericClockController,
+        mclk: &mut Mclk,
+        delay: &mut Delay,
+        rx_channel: WifiRxChannel,
+        tx_channel: WifiTxChannel,
+        rx_ring: &'static mut [u8; RX_RING_LEN],
+    ) -> Wifi {
+        let (pwr, uart) = Self::start_uart(pins, sercom0, clocks, mclk, delay);
+        Wifi {
+            _pwr: pwr,
+            transport: Transport::new(uart, rx_channel, tx_channel, rx_ring),
+            sequence: 0,
         }
     }
 
@@ -315,14 +386,7 @@ impl Wifi {
     /// initializing the rest of your peripherals but before you start
     /// issuing RPCs against the wifi chip.
     pub fn enable(&mut self, _cs: &CriticalSection, nvic: &mut NVIC) {
-        unsafe {
-            nvic.set_priority(interrupt::SERCOM0_0, 1);
-            NVIC::unmask(interrupt::SERCOM0_0);
-            nvic.set_priority(interrupt::SERCOM0_2, 1);
-            NVIC::unmask(interrupt::SERCOM0_2);
-        }
-
-        self.uart.enable_interrupts(uart::Flags::RXC);
+        self.transport.enable(nvic);
     }
 
     /// Connects to an access point and requests an IP address via DHCP.
@@ -646,34 +710,16 @@ impl Wifi {
 
     /// Called from ISR: Handles the signal that the UART has recieved
     /// a byte that needs to be read.
+    #[cfg(not(feature = "wifi-dma"))]
     pub fn _handle_rx(&mut self) {
-        match self.uart.read() {
-            Ok(b) => {
-                if let Ok(mut wgr) = self.rx_buff_isr.grant_exact(1) {
-                    wgr[0] = b;
-                    wgr.commit(1);
-                } else {
-                    panic!("overrun");
-                }
-            }
-            Err(nb::Error::Other(e)) => {
-                panic!("unrecoverable read error");
-            }
-            // Skip WouldBlock
-            Err(nb::Error::WouldBlock) => (),
-        };
+        self.transport.handle_rx();
     }
 
     /// Called from ISR: Handles the signal that the outgoing UART buffer
     /// has room for the next byte.
+    #[cfg(not(feature = "wifi-dma"))]
     pub fn _handle_data_empty(&mut self) {
-        if let Ok(rgr) = self.tx_buff_isr.read() {
-            let buf = rgr.buf();
-            self.uart.write(buf[0]).ok();
-            rgr.release(1);
-        } else {
-            self.uart.disable_interrupts(uart::Flags::DRE);
-        }
+        self.transport.handle_data_empty();
     }
 
     /// Issues an RPC, blocking till a response is recieved.
@@ -702,14 +748,33 @@ impl Wifi {
         &mut self,
         rpc: &mut RPC,
     ) -> Result<RPC::ReturnValue, erpc::Err<RPC::Error>> {
-        let fh = self.recieve_frame_header(rpc)?; // Read the frame header
+        // Read the frame header
+        let fh = match self.recieve_frame_header(rpc) {
+            Ok(fh) => fh,
+            Err(e) => {
+                self.transport.discard_pending();
+                return Err(e);
+            }
+        };
 
         // Read the payload, check CRC, hand off to underlying trait to decode
         let mut buffer = [0u8; 2048];
         let sz = fh.msg_length as usize;
-        self.recieve_bytes(&mut buffer[..sz]);
+        if sz > buffer.len() {
+            // A corrupt or oversized header; don't index out of range.
+            self.transport.discard_pending();
+            return Err(erpc::Err::ResponseOverrun);
+        }
+        if !self.read_ok(&mut buffer[..sz], INTER_BYTE_BUDGET) {
+            self.transport.discard_pending();
+            return Err(erpc::Err::Unknown);
+        }
 
-        fh.check_crc(&buffer[..sz])?;
+        let crc = fh.check_crc(&buffer[..sz]);
+        if crc.is_err() {
+            self.transport.discard_pending();
+        }
+        crc?;
         rpc.parse(&buffer[..sz])
     }
 
@@ -718,7 +783,10 @@ impl Wifi {
         _rpc: &mut RPC,
     ) -> Result<erpc::FrameHeader, erpc::Err<RPC::Error>> {
         let mut buffer = [0u8; 4];
-        self.recieve_bytes(&mut buffer);
+        if !self.read_ok(&mut buffer, REPLY_WAIT_BUDGET) {
+            self.transport.discard_pending();
+            return Err(erpc::Err::Unknown);
+        }
 
         match erpc::FrameHeader::parse(&buffer[..]) {
             Err(e) => Err(erpc::Err::Parsing(e)),
@@ -726,49 +794,74 @@ impl Wifi {
         }
     }
 
-    fn recieve_bytes(&mut self, mut buffer: &mut [u8]) {
-        while buffer.len() > 0 {
-            let r = match self.rx_buff_input.read() {
-                Ok(r) => r,
-                Err(_) => {
-                    continue;
-                }
-            };
-            let b = r.buf();
-            let copy_amt = if b.len() < buffer.len() {
-                b.len()
-            } else {
-                buffer.len()
-            };
-
-            for (i, b) in b[..copy_amt].iter().enumerate() {
-                buffer[i] = *b;
-            }
-            buffer = &mut buffer[copy_amt..];
-
-            r.release(copy_amt);
-        }
-    }
-
-    fn write_frame(&mut self, msg: &heapless::Vec<u8, 256>) -> Result<(), ()> {
+    fn write_frame(&mut self, msg: &heapless::Vec<u8, 256>) -> Result<(), TransportError> {
         let header = erpc::FrameHeader::new_from_msg(msg);
-        self.tx(header.as_bytes().iter().chain(msg));
-        Ok(())
+        self.transport.write(&header.as_bytes())?;
+        self.transport.write(msg)
     }
 
-    fn tx<'a, D: Iterator<Item = &'a u8>>(&mut self, data: D) {
-        for b in data {
-            if let Ok(mut wgr) = self.tx_buff_input.grant_exact(1) {
-                wgr[0] = *b;
-                wgr.commit(1);
-            }
-            self.uart.enable_interrupts(uart::Flags::DRE);
-        }
+    /// Non-generic so the error path is not duplicated per RPC type.
+    fn read_ok(&mut self, buffer: &mut [u8], first_byte_budget: u32) -> bool {
+        self.transport.read_exact(buffer, first_byte_budget).is_ok()
     }
 
     fn next_seq(&mut self) -> u32 {
         self.sequence += 1;
         self.sequence
+    }
+}
+
+/// Transport instrumentation, used by the `wifi_bench` example to compare the
+/// interrupt-driven and DMA-driven UART backends.
+///
+/// Requires the DWT cycle counter to be running (see `wifi_bench`).
+#[cfg(feature = "wifi-stats")]
+pub mod stats {
+    use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    use cortex_m::peripheral::DWT;
+
+    static ISR_COUNT: AtomicU32 = AtomicU32::new(0);
+    static ISR_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+    /// Counters accumulated since the last [`reset`].
+    #[derive(Clone, Copy, Debug)]
+    pub struct Snapshot {
+        /// Number of wifi transport interrupt handler invocations.
+        pub isr_count: u32,
+        /// CPU cycles spent inside the handler bodies. Excludes exception
+        /// entry/exit, which costs roughly another 25-30 cycles per invocation.
+        pub isr_cycles: u32,
+    }
+
+    pub fn reset() {
+        ISR_COUNT.store(0, Relaxed);
+        ISR_CYCLES.store(0, Relaxed);
+    }
+
+    pub fn snapshot() -> Snapshot {
+        Snapshot {
+            isr_count: ISR_COUNT.load(Relaxed),
+            isr_cycles: ISR_CYCLES.load(Relaxed),
+        }
+    }
+
+    /// Accounts for one interrupt handler invocation; create it on entry to
+    /// the handler and let it drop on exit.
+    pub struct IsrGuard(u32);
+
+    impl IsrGuard {
+        #[inline(always)]
+        pub fn enter() -> Self {
+            Self(DWT::cycle_count())
+        }
+    }
+
+    impl Drop for IsrGuard {
+        #[inline(always)]
+        fn drop(&mut self) {
+            ISR_CYCLES.fetch_add(DWT::cycle_count().wrapping_sub(self.0), Relaxed);
+            ISR_COUNT.fetch_add(1, Relaxed);
+        }
     }
 }
 
@@ -783,6 +876,7 @@ pub mod wifi_prelude {
 }
 
 /// Declares static globals for the wifi controller, and wires up interrupts.
+#[cfg(not(feature = "wifi-dma"))]
 #[macro_export]
 macro_rules! wifi_singleton {
     ($global_name:ident) => {
@@ -824,6 +918,49 @@ macro_rules! wifi_singleton {
                     wifi._handle_rx();
                 });
             }
+        }
+    };
+}
+
+/// Declares static globals for the wifi controller (DMA transport). Defines the
+/// `DMAC_0` handler, which counts receive-ring wraps; no UART interrupts.
+#[cfg(feature = "wifi-dma")]
+#[macro_export]
+macro_rules! wifi_singleton {
+    ($global_name:ident) => {
+        static mut $global_name: Option<Wifi> = None;
+        static mut WIFI_RX_RING: [u8; RX_RING_LEN] = [0; RX_RING_LEN];
+
+        /// Initializes the wifi controller from within an interrupt-free context.
+        #[allow(clippy::too_many_arguments)]
+        unsafe fn wifi_init(
+            _cs: &CriticalSection,
+            pins: WifiPins,
+            sercom0: Sercom0,
+            clocks: &mut GenericClockController,
+            mclk: &mut Mclk,
+            delay: &mut Delay,
+            rx_channel: WifiRxChannel,
+            tx_channel: WifiTxChannel,
+        ) {
+            unsafe {
+                $global_name = Some(Wifi::init(
+                    pins,
+                    sercom0,
+                    clocks,
+                    mclk,
+                    delay,
+                    rx_channel,
+                    tx_channel,
+                    &mut *core::ptr::addr_of_mut!(WIFI_RX_RING),
+                ));
+            }
+        }
+
+        #[interrupt]
+        fn DMAC_0() {
+            // Receive ring wrapped (DMA channel 0 transfer complete).
+            _handle_dma_rx_wrap();
         }
     };
 }

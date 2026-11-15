@@ -44,15 +44,19 @@ pub use storage::*;
 
 #[cfg(feature = "wifi")]
 mod wifi;
+#[cfg(feature = "wifi-stats")]
+pub use wifi::stats as wifi_stats;
 #[cfg(feature = "wifi")]
 #[path = "wifi/asynchronous.rs"]
 pub mod wifi_async;
 #[cfg(feature = "wifi")]
 pub use wifi::{
     rpcs as wifi_rpcs, wifi_prelude, Wifi, WifiConnectError, WifiConnectStage, WifiPins,
-    WifiIo, WifiInterrupts, last_uart_error as wifi_last_uart_error,
     DHCP_ALREADY_STOPPED,
 };
+// The async split runs on the interrupt transport only.
+#[cfg(all(feature = "wifi", not(feature = "wifi-dma")))]
+pub use wifi::{last_uart_error as wifi_last_uart_error, WifiInterrupts, WifiIo};
 #[cfg(feature = "wifi")]
 pub mod wifi_types {
     pub use seeed_erpc::{
