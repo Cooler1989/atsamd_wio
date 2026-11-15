@@ -57,8 +57,17 @@ fn main() -> ! {
     user_led.set_high().unwrap();
 
     // Initialize the wifi peripheral.
+    #[cfg(feature = "wifi-dma")]
+    let mut dmac = wio::hal::dmac::DmaController::init(peripherals.dmac, &mut peripherals.pm);
+    #[cfg(feature = "wifi-dma")]
+    let channels = dmac.split();
+    #[cfg(feature = "wifi-dma")]
+    let rx_channel = channels.0.init(wio::hal::dmac::PriorityLevel::Lvl3);
+    #[cfg(feature = "wifi-dma")]
+    let tx_channel = channels.1.init(wio::hal::dmac::PriorityLevel::Lvl0);
     let nvic = &mut core.NVIC;
     disable_interrupts(|cs| unsafe {
+        #[cfg(not(feature = "wifi-dma"))]
         wifi_init(
             cs,
             sets.wifi,
@@ -66,6 +75,17 @@ fn main() -> ! {
             &mut clocks,
             &mut peripherals.mclk,
             &mut delay,
+        );
+        #[cfg(feature = "wifi-dma")]
+        wifi_init(
+            cs,
+            sets.wifi,
+            peripherals.sercom0,
+            &mut clocks,
+            &mut peripherals.mclk,
+            &mut delay,
+            rx_channel,
+            tx_channel,
         );
 
         if let Some(wifi) = WIFI.as_mut() {
@@ -95,6 +115,7 @@ fn main() -> ! {
     write(&mut display, textbuffer.as_str(), Point::new(3, 3));
     textbuffer.truncate(0);
 
+    let mut scans: u32 = 0;
     loop {
         user_led.set_low().ok();
         // Start scanning
@@ -130,6 +151,11 @@ fn main() -> ! {
         user_led.set_high().ok();
 
         // Write the information to the screen.
+        scans += 1;
+        writeln!(textbuffer, "scan #{}", scans).unwrap();
+        write_with_clear(&mut display, textbuffer.as_str(), 14, Point::new(3, 16));
+        textbuffer.truncate(0);
+
         writeln!(textbuffer, "{:?} APs", num).unwrap();
         write_with_clear(&mut display, textbuffer.as_str(), 3, Point::new(170, 3));
         textbuffer.truncate(0);

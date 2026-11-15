@@ -6,13 +6,22 @@ use atsamd_hal::{
     prelude::*,
     sercom::{uart, IoSet2, Sercom0},
 };
-use bbqueue::{self, BBBuffer};
+#[cfg(not(feature = "wifi-dma"))]
+use bbqueue::BBBuffer;
 
 use cortex_m::interrupt::CriticalSection;
 use cortex_m::peripheral::NVIC;
 
+#[cfg(not(feature = "wifi-dma"))]
 mod irq;
+#[cfg(not(feature = "wifi-dma"))]
 use irq::Transport;
+#[cfg(feature = "wifi-dma")]
+mod dma;
+#[cfg(feature = "wifi-dma")]
+use dma::Transport;
+#[cfg(feature = "wifi-dma")]
+pub use dma::{WifiRxChannel, WifiTxChannel, RX_RING_LEN};
 
 pub use erpc::rpcs;
 use seeed_erpc as erpc;
@@ -54,15 +63,14 @@ pub type WifiUartPads = uart::Pads<Sercom0, IoSet2, WifiRx, WifiTx>;
 pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
 
 impl Wifi {
-    pub fn init(
+    /// Builds the UART and power-cycles the RTL8720.
+    fn start_uart(
         pins: WifiPins,
         sercom0: Sercom0,
         clocks: &mut GenericClockController,
         mclk: &mut Mclk,
         delay: &mut Delay,
-        rx_buff: &'static BBBuffer<512>,
-        tx_buff: &'static BBBuffer<128>,
-    ) -> Wifi {
+    ) -> (WifiPwr, WifiUart) {
         let gclk0 = clocks.gclk0();
 
         let pads = uart::Pads::default().rx(pins.miso).tx(pins.mosi);
@@ -86,13 +94,43 @@ impl Wifi {
         OutputPin::set_high(&mut pwr).ok();
         delay.delay_ms(200u8);
 
-        let sequence = 0;
+        (pwr, uart.enable())
+    }
 
-        let uart = uart.enable();
+    #[cfg(not(feature = "wifi-dma"))]
+    pub fn init(
+        pins: WifiPins,
+        sercom0: Sercom0,
+        clocks: &mut GenericClockController,
+        mclk: &mut Mclk,
+        delay: &mut Delay,
+        rx_buff: &'static BBBuffer<512>,
+        tx_buff: &'static BBBuffer<128>,
+    ) -> Wifi {
+        let (pwr, uart) = Self::start_uart(pins, sercom0, clocks, mclk, delay);
         Wifi {
             _pwr: pwr,
             transport: Transport::new(uart, rx_buff, tx_buff),
-            sequence,
+            sequence: 0,
+        }
+    }
+
+    #[cfg(feature = "wifi-dma")]
+    pub fn init(
+        pins: WifiPins,
+        sercom0: Sercom0,
+        clocks: &mut GenericClockController,
+        mclk: &mut Mclk,
+        delay: &mut Delay,
+        rx_channel: WifiRxChannel,
+        tx_channel: WifiTxChannel,
+        rx_ring: &'static mut [u8; RX_RING_LEN],
+    ) -> Wifi {
+        let (pwr, uart) = Self::start_uart(pins, sercom0, clocks, mclk, delay);
+        Wifi {
+            _pwr: pwr,
+            transport: Transport::new(uart, rx_channel, tx_channel, rx_ring),
+            sequence: 0,
         }
     }
 
@@ -144,12 +182,14 @@ impl Wifi {
 
     /// Called from ISR: Handles the signal that the UART has recieved
     /// a byte that needs to be read.
+    #[cfg(not(feature = "wifi-dma"))]
     pub fn _handle_rx(&mut self) {
         self.transport.handle_rx();
     }
 
     /// Called from ISR: Handles the signal that the outgoing UART buffer
     /// has room for the next byte.
+    #[cfg(not(feature = "wifi-dma"))]
     pub fn _handle_data_empty(&mut self) {
         self.transport.handle_data_empty();
     }
@@ -180,16 +220,28 @@ impl Wifi {
         &mut self,
         rpc: &mut RPC,
     ) -> Result<RPC::ReturnValue, erpc::Err<RPC::Error>> {
-        let fh = self.recieve_frame_header(rpc)?; // Read the frame header
+        // Read the frame header
+        let fh = match self.recieve_frame_header(rpc) {
+            Ok(fh) => fh,
+            Err(e) => {
+                self.transport.discard_pending();
+                return Err(e);
+            }
+        };
 
         // Read the payload, check CRC, hand off to underlying trait to decode
         let mut buffer = [0u8; 2048];
         let sz = fh.msg_length as usize;
         if !self.read_ok(&mut buffer[..sz]) {
+            self.transport.discard_pending();
             return Err(erpc::Err::Unknown);
         }
 
-        fh.check_crc(&buffer[..sz])?;
+        let crc = fh.check_crc(&buffer[..sz]);
+        if crc.is_err() {
+            self.transport.discard_pending();
+        }
+        crc?;
         rpc.parse(&buffer[..sz])
     }
 
@@ -199,6 +251,7 @@ impl Wifi {
     ) -> Result<erpc::FrameHeader, erpc::Err<RPC::Error>> {
         let mut buffer = [0u8; 4];
         if !self.read_ok(&mut buffer) {
+            self.transport.discard_pending();
             return Err(erpc::Err::Unknown);
         }
 
@@ -290,6 +343,7 @@ pub mod wifi_prelude {
 }
 
 /// Declares static globals for the wifi controller, and wires up interrupts.
+#[cfg(not(feature = "wifi-dma"))]
 #[macro_export]
 macro_rules! wifi_singleton {
     ($global_name:ident) => {
@@ -330,6 +384,42 @@ macro_rules! wifi_singleton {
                 $global_name.as_mut().map(|wifi| {
                     wifi._handle_rx();
                 });
+            }
+        }
+    };
+}
+
+/// Declares static globals for the wifi controller (DMA transport; defines no
+/// interrupt handlers).
+#[cfg(feature = "wifi-dma")]
+#[macro_export]
+macro_rules! wifi_singleton {
+    ($global_name:ident) => {
+        static mut $global_name: Option<Wifi> = None;
+        static mut WIFI_RX_RING: [u8; RX_RING_LEN] = [0; RX_RING_LEN];
+
+        /// Initializes the wifi controller from within an interrupt-free context.
+        unsafe fn wifi_init(
+            _cs: &CriticalSection,
+            pins: WifiPins,
+            sercom0: Sercom0,
+            clocks: &mut GenericClockController,
+            mclk: &mut Mclk,
+            delay: &mut Delay,
+            rx_channel: WifiRxChannel,
+            tx_channel: WifiTxChannel,
+        ) {
+            unsafe {
+                $global_name = Some(Wifi::init(
+                    pins,
+                    sercom0,
+                    clocks,
+                    mclk,
+                    delay,
+                    rx_channel,
+                    tx_channel,
+                    &mut *core::ptr::addr_of_mut!(WIFI_RX_RING),
+                ));
             }
         }
     };

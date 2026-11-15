@@ -71,6 +71,8 @@ wifi-fw-before-212 = []
 wifi = ["bbqueue", "generic-array", "seeed-erpc"]
 # count interrupts and time spent in the wifi transport (used by wifi_bench)
 wifi-stats = ["wifi"]
+# move the wifi UART from per-byte interrupts to DMA (uses DMA channels 0 and 1)
+wifi-dma = ["wifi", "atsamd-hal/dma"]
 
 [[example]]
 name = "blinky"

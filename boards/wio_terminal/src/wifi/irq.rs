@@ -95,6 +95,9 @@ impl Transport {
         Ok(())
     }
 
+    /// Nothing to do: the interrupt transport has no stale-data hazard.
+    pub fn discard_pending(&mut self) {}
+
     /// Blocks until `buffer` has been filled from the receive queue.
     pub fn read_exact(&mut self, mut buffer: &mut [u8]) -> Result<(), TransportError> {
         while buffer.len() > 0 {

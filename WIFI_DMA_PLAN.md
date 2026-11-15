@@ -179,19 +179,28 @@ let rx: RxTransfer = Transfer::new(rx_channel, rx, ring, true)
     .begin(<Sercom0 as Sercom>::DMA_RX_TRIGGER, TriggerAction::Burst);
 ```
 
-Write position:
+Write position (corrected on hardware in Phase 2; the original version here
+used `ACTIVE` only while `ABUSY` was set, which reads a stale write-back
+count and hangs on the second RPC):
 
 ```rust
 fn write_index() -> usize {
     let dmac = unsafe { pac::Dmac::steal() };
-    let active = dmac.active().read();
-    let remaining = if active.abusy().bit_is_set() && active.id().bits() as usize == RX_CHANNEL {
-        active.btcnt().bits()
-    } else {
-        let writeback = dmac.wrbaddr().read().bits() as *const u8;
-        unsafe { core::ptr::read_volatile(writeback.add(RX_CHANNEL * 16 + 2) as *const u16) }
-    } as usize;
-    // Before the first byte the write-back entry is still zero.
+    let remaining = loop {
+        let before = dmac.active().read();
+        // The DMAC writes a channel's descriptor back only when another channel
+        // takes over; ACTIVE keeps the live count of the last channel to run,
+        // even after ABUSY clears (ABUSY stays set while the channel idles).
+        let remaining = if before.id().bits() as usize == RX_CHANNEL {
+            before.btcnt().bits()
+        } else {
+            let writeback = dmac.wrbaddr().read().bits() as *const u8;
+            unsafe { core::ptr::read_volatile(writeback.add(RX_CHANNEL * 16 + 2) as *const u16) }
+        };
+        if dmac.active().read().bits() == before.bits() {
+            break remaining as usize;
+        }
+    };
     if remaining == 0 || remaining > RX_RING_LEN { 0 } else { RX_RING_LEN - remaining }
 }
 ```
@@ -373,7 +382,18 @@ Checks:
   (`text`/`bss`).
 - **[hardware]** `wifi_bench` numbers match phase 0 within noise.
 
-**Status: done, hardware check pending the LCD readout.**
+**Status: done. Hardware check passed.**
+
+Hardware result after the refactor (interrupt backend), vs. Phase 0:
+
+| Test | Phase 0 us min/avg/max | Phase 1 us min/avg/max | ISRs/RPC | ISR CPU |
+|---|---|---|---|---|
+| Get Version x200 | 994 / 1000 / 1034 | 757 / 999 / 1007 | 35 / 35 | 4.2% / 4.2% |
+| ScanGetAP x20 | 19888 / 20008 / 20040 | 19986 / 20028 / 20072 | 1028 / 1028 | 7.1% / 7.1% |
+
+Stall sweep identical: 0, 10, 20, 30 ok, freezes at 50. Averages and ISR
+counts are unchanged; the 757 us Get Version minimum is a single low outlier
+(the RTL8720 replying early) and does not affect the average.
 
 Findings:
 
@@ -401,6 +421,23 @@ Findings:
   and `--features wifi-stats,bootloader` passes.
 
 ### Phase 2 — DMA transport behind `wifi-dma`
+
+**Status: code complete; benchmark passes; `wifi_connect` check pending; the `wifi_scan` 5-minute check fails on BOTH backends (pre-existing, see 3).**
+
+Done:
+- Step 2.0 gate test passed (21-byte reply seen as write index 0 -> 21, ring starts with a valid frame header). Probe example deleted.
+- Steps 2.1-2.5 implemented: `wifi-dma` feature, `src/wifi/dma.rs`, transport selection in `mod.rs`, two `wifi_singleton!` macros, examples updated. `wifi_connect` reads `WIFI_SSID`/`WIFI_PASS` at build time via `option_env!` (placeholders otherwise); `wifi_scan` shows a `scan #N` counter.
+- Builds pass on both backends. Sizes (`wifi_connect` text/bss): interrupt 14488/708 (unchanged from Phase 1); DMA 15176/2576 (bss +1868, as predicted).
+
+Findings (hardware):
+1. **R1 was real; section 3's `write_index()` is corrected above.** Trusting `ACTIVE` only while `ABUSY` is set made the second RPC hang.
+2. **Benchmark (the point of the project):** with the cycle counter valid, the interrupt backend panics at the 50 us stall step (RX overrun in `handle_rx`, as R8 predicted). The DMA backend completes every step up to 400 us with no errors, at the same latency (Get Version ~1000 us, ScanGetAP ~20030 us) and 0% transport-interrupt CPU (vs 4.2% / 7.1%). Numbers are in `examples/README.md`.
+3. **`wifi_scan` 5-minute soak fails on both backends**, so it is not a DMA regression:
+   - interrupt: `panic!("overrun")` in `handle_rx` (512-byte RX queue full) within 5 minutes;
+   - DMA: an RPC fails with `SERCOM0.STATUS.BUFOVF` within about a minute, and the example's `unwrap()` panics. Ring dumps show a clean stream with up to ~8 consecutive bytes missing mid-reply.
+   Both happen in the tight `IsScanning` polling loop while the RTL8720 scans; the bench, which waits 50 ms between polls, has no errors. Root cause not found. Ruled out for DMA: polling rate, the TX DMA channel, an attached debugger, stale write-back. Belongs with Phase 4 (resync, timeout, examples not `unwrap`ping), or a separate investigation of what the RTL8720 sends during scans.
+4. **Measurement trap:** ending any probe-rs session (`download`/`reset`/`read`, or killing `probe-rs run`) clears `DEMCR.TRCENA`, which stops the DWT cycle counter after the firmware enabled it. `wifi_bench` read 0 us and its TC3 stall loop spun forever. `wifi_bench` now re-enables the counter before each run and inside the stall loop.
+5. Debug instrumentation used for 3 has been removed from `dma.rs`. The DMA bench numbers in 2 were taken with that debug build (it added an 8 us back-off in the RX wait loop); re-take them on the final code in Phase 3.
 
 **Step 2.0 — gate test for risk R1 [hardware].** Before writing the transport,
 add a temporary example `examples/wifi_dma_probe.rs` that sets up the UART and

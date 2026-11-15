@@ -31,8 +31,6 @@
 #![no_std]
 #![no_main]
 #![allow(static_mut_refs)]
-// `wifi-dma` is introduced by the DMA transport; until then it is unknown.
-#![allow(unexpected_cfgs)]
 
 use embedded_graphics as eg;
 use panic_halt as _;
@@ -121,8 +119,17 @@ fn main() -> ! {
 
     // Initialize the wifi peripheral. This block is the only part of the
     // benchmark that depends on the transport backend.
+    #[cfg(feature = "wifi-dma")]
+    let mut dmac = wio::hal::dmac::DmaController::init(peripherals.dmac, &mut peripherals.pm);
+    #[cfg(feature = "wifi-dma")]
+    let channels = dmac.split();
+    #[cfg(feature = "wifi-dma")]
+    let rx_channel = channels.0.init(wio::hal::dmac::PriorityLevel::Lvl3);
+    #[cfg(feature = "wifi-dma")]
+    let tx_channel = channels.1.init(wio::hal::dmac::PriorityLevel::Lvl0);
     let nvic = &mut core.NVIC;
     disable_interrupts(|cs| unsafe {
+        #[cfg(not(feature = "wifi-dma"))]
         wifi_init(
             cs,
             sets.wifi,
@@ -130,6 +137,17 @@ fn main() -> ! {
             &mut clocks,
             &mut peripherals.mclk,
             &mut delay,
+        );
+        #[cfg(feature = "wifi-dma")]
+        wifi_init(
+            cs,
+            sets.wifi,
+            peripherals.sercom0,
+            &mut clocks,
+            &mut peripherals.mclk,
+            &mut delay,
+            rx_channel,
+            tx_channel,
         );
         if let Some(wifi) = WIFI.as_mut() {
             wifi.enable(cs, nvic);
@@ -204,9 +222,33 @@ fn TC3() {
         .intflag()
         .write(|w| w.ovf().set_bit());
 
+    ensure_cycle_counter();
     let start = DWT::cycle_count();
     let stall = STALL_CYCLES.load(Relaxed);
-    while DWT::cycle_count().wrapping_sub(start) < stall {}
+    while DWT::cycle_count().wrapping_sub(start) < stall {
+        // Never spin forever if a probe stops the counter mid-stall.
+        ensure_cycle_counter();
+    }
+}
+
+/// Ending a debug probe session (e.g. `probe-rs` exiting) clears
+/// `DEMCR.TRCENA`, which stops the cycle counter. All timing here, and the
+/// TC3 stall loop, depend on it, so turn it back on if it was switched off.
+fn ensure_cycle_counter() {
+    const DEMCR: *mut u32 = 0xE000_EDFC as *mut u32;
+    const TRCENA: u32 = 1 << 24;
+    const DWT_CTRL: *mut u32 = 0xE000_1000 as *mut u32;
+    const CYCCNTENA: u32 = 1;
+    unsafe {
+        let demcr = core::ptr::read_volatile(DEMCR);
+        if demcr & TRCENA == 0 {
+            core::ptr::write_volatile(DEMCR, demcr | TRCENA);
+        }
+        let ctrl = core::ptr::read_volatile(DWT_CTRL);
+        if ctrl & CYCCNTENA == 0 {
+            core::ptr::write_volatile(DWT_CTRL, ctrl | CYCCNTENA);
+        }
+    }
 }
 
 /// Results of running one workload a number of times.
@@ -233,6 +275,7 @@ fn run(count: u32, mut rpc: impl FnMut() -> bool) -> Run {
         isr_cycles: 0,
     };
 
+    ensure_cycle_counter();
     wifi_stats::reset();
     for _ in 0..count {
         let start = DWT::cycle_count();

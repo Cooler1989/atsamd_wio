@@ -109,4 +109,21 @@ Baseline: firmware 2.1.3, 614400 baud, header `wifi_bench [ijrq]`. Copied from t
 
 | Stall (us) | 0 | 10 | 20 | 30 | 50 |
 |------------|---|----|----|----|----|
-| Result | ok | ok | ok | ok | freezes (stalls at 50) |
+| Result | ok | ok | ok | ok | panics (RX overrun in `handle_rx`) |
+
+Re-run on 2026-11-15 with the cycle-counter guard (see below): Get Version 994 / 1003 / 1501 us, ScanGetAP 20005 / 20031 / 20053 us, same ISR figures, stall sweep again ok up to 30 and panics at 50.
+
+#### DMA backend (`--features wifi-stats,wifi-dma`)
+
+| Test | Count | Errors | us min / avg / max | ISRs per RPC | ISR CPU |
+|------|-------|--------|--------------------|--------------|---------|
+| Get Version | 200 | 0 | 805 / 1000 / 1010 | 0 | 0.0% |
+| ScanGetAP | 20 | 0 | 20004 / 20033 / 20057 | 0 | 0.0% |
+
+| Stall (us) | 0 | 10 | 20 | 30 | 50 | 100 | 200 | 400 |
+|------------|---|----|----|----|----|-----|-----|-----|
+| Result | ok | ok | ok | ok | ok | ok | ok | completed (result ran off the LCD; `done` printed) |
+
+Measured with a temporary debug build of the DMA transport (extra 8 us back-off in the RX wait loop); see `WIFI_DMA_PLAN.md`.
+
+Note: ending a debug-probe session clears `DEMCR.TRCENA` and stops the cycle counter. The bench re-enables it before each run and inside the stall loop, so its numbers stay valid when flashed with `probe-rs`.
