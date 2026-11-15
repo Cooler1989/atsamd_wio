@@ -20,8 +20,7 @@ pub type WifiRxChannel = Channel<Ch0, Ready>;
 pub type WifiTxChannel = Channel<Ch1, Ready>;
 type RxHalf = Uart<Config<WifiUartPads>, RxDuplex>;
 type TxHalf = Uart<Config<WifiUartPads>, TxDuplex, NoneT, WifiTxChannel>;
-type RxTransfer =
-    Transfer<Channel<Ch0, Busy>, BufferPair<RxHalf, &'static mut [u8; RX_RING_LEN]>>;
+type RxTransfer = Transfer<Channel<Ch0, Busy>, BufferPair<RxHalf, &'static mut [u8; RX_RING_LEN]>>;
 const RX_CHANNEL: usize = <Ch0 as ChId>::USIZE;
 
 /// Number of times the receive ring has wrapped, counted by the `DMAC_0`
@@ -29,6 +28,7 @@ const RX_CHANNEL: usize = <Ch0 as ChId>::USIZE;
 static RX_WRAPS: AtomicU32 = AtomicU32::new(0);
 
 /// Called from the `DMAC_0` interrupt (see `wifi_singleton!`).
+#[doc(hidden)]
 pub fn _handle_dma_rx_wrap() {
     let dmac = unsafe { pac::Dmac::steal() };
     let flags = dmac.channel(RX_CHANNEL).chintflag();
@@ -93,8 +93,7 @@ fn written_total() -> u32 {
         let wraps = RX_WRAPS.load(Ordering::Relaxed);
         let pending = flags.read().tcmpl().bit_is_set();
         let index = write_index();
-        if flags.read().tcmpl().bit_is_set() == pending
-            && RX_WRAPS.load(Ordering::Relaxed) == wraps
+        if flags.read().tcmpl().bit_is_set() == pending && RX_WRAPS.load(Ordering::Relaxed) == wraps
         {
             return (wraps + pending as u32)
                 .wrapping_mul(RX_RING_LEN as u32)
@@ -152,7 +151,7 @@ impl Transport {
     }
 
     pub fn write(&mut self, frame: &[u8]) -> Result<(), TransportError> {
-        self.tx.write_all(frame).map_err(|_| TransportError::Rx)
+        self.tx.write_all(frame).map_err(|_| TransportError::Tx)
     }
 
     /// Blocks until `buffer` has been filled from the ring. Fails if the

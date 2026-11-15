@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - *(wio_terminal)* The wifi module is split into `wifi/mod.rs` and a transport per backend; the public RPC API is unchanged.
+- *(wio_terminal)* Wifi receive errors no longer panic. A lost byte, UART overflow or framing error, an oversized reply (`Err::ResponseOverrun`) or a missing reply (about 10 s; about 10 ms between bytes) fails the RPC with an error, and the transport resynchronises. Previously the interrupt transport panicked on overrun, and a missing reply blocked forever.
 - *(wio_terminal)* [**breaking change**] Firmware now links at `0x0` by default; enable `bootloader` to keep the previous 16 KiB offset for UF2 flashing.
 
 ## [0.9.0](https://github.com/atsamd-rs/atsamd/compare/wio_terminal-0.8.0...wio_terminal-0.9.0) - 2025-07-06

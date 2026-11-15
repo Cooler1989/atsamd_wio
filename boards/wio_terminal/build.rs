@@ -10,7 +10,10 @@ fn main() {
         let (name, bytes): (&str, &[u8]) = if env::var_os("CARGO_FEATURE_BOOTLOADER").is_some() {
             ("memory-bootloader.x", include_bytes!("memory-bootloader.x"))
         } else {
-            ("memory-nobootloader.x", include_bytes!("memory-nobootloader.x"))
+            (
+                "memory-nobootloader.x",
+                include_bytes!("memory-nobootloader.x"),
+            )
         };
         let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
         File::create(out.join("memory.x"))

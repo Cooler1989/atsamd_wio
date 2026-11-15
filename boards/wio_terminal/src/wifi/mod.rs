@@ -56,6 +56,8 @@ pub enum TransportError {
     /// The UART reported an overflow or framing error, or received bytes had
     /// to be dropped because the receive buffer was full.
     Rx,
+    /// The request could not be sent.
+    Tx,
     /// Nothing arrived within the read budget (see [`REPLY_WAIT_BUDGET`] and
     /// [`INTER_BYTE_BUDGET`]).
     Timeout,
@@ -135,6 +137,7 @@ impl Wifi {
     }
 
     #[cfg(feature = "wifi-dma")]
+    #[allow(clippy::too_many_arguments)]
     pub fn init(
         pins: WifiPins,
         sercom0: Sercom0,
@@ -423,6 +426,7 @@ macro_rules! wifi_singleton {
         static mut WIFI_RX_RING: [u8; RX_RING_LEN] = [0; RX_RING_LEN];
 
         /// Initializes the wifi controller from within an interrupt-free context.
+        #[allow(clippy::too_many_arguments)]
         unsafe fn wifi_init(
             _cs: &CriticalSection,
             pins: WifiPins,

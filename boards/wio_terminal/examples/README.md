@@ -92,13 +92,27 @@ Makes the Wio Terminal appear as a USB serial port. The screen can be written to
 ### [`snake`](snake.rs)
 Generic snake game where you use the 5-way-switch to control the snake.
 
+### [`wifi_connect`](wifi_connect.rs)
+
+Connects to an access point and shows the IP address, netmask and gateway on the LCD. The network name and password are taken from the `WIFI_SSID` and `WIFI_PASS` environment variables at build time:
+
+```
+WIFI_SSID=mynetwork WIFI_PASS=secret cargo run --release --example wifi_connect
+```
+
+Add `--features wifi-dma` to use the DMA transport.
+
+### [`wifi_scan`](wifi_scan.rs)
+
+Scans for access points repeatedly and lists them on the LCD, with a scan counter and an error counter: a failed RPC is counted and the scan retried. Add `--features wifi-dma` to use the DMA transport.
+
 ### [`wifi_bench`](wifi_bench.rs)
 
 Benchmark the wifi UART transport: RPC round trip times, transport interrupt load, and tolerance to other interrupt handlers stalling the CPU. Results are shown on the LCD. Requires the `wifi-stats` feature.
 
 #### interrupt backend
 
-Baseline: firmware 2.1.3, 614400 baud, header `wifi_bench [ijrq]`. Copied from the LCD.
+RTL8720 firmware 2.1.3, 614400 baud.
 
 | Test | Count | Errors | us min / avg / max | ISRs per RPC | ISR CPU |
 |------|-------|--------|--------------------|--------------|---------|
@@ -107,11 +121,12 @@ Baseline: firmware 2.1.3, 614400 baud, header `wifi_bench [ijrq]`. Copied from t
 
 1 kHz stall test (us stalled per ms):
 
-| Stall (us) | 0 | 10 | 20 | 30 | 50 |
-|------------|---|----|----|----|----|
-| Result | ok | ok | ok | ok | panics (RX overrun in `handle_rx`) |
+| Stall (us) | 0 | 10 | 20 | 30 | 50 | 100 | 200 | 400 |
+|------------|---|----|----|----|----|-----|-----|-----|
+| Errors (of 60 RPCs) | 0 | 0 | 0 | 0 | 10 | 60 | 60 | 60 |
 
-Re-run on 2026-11-15 with the cycle-counter guard (see below): Get Version 994 / 1003 / 1501 us, ScanGetAP 20005 / 20031 / 20053 us, same ISR figures, stall sweep again ok up to 30 and panics at 50.
+Before receive errors were returned as RPC errors, the interrupt transport
+panicked at the 50 us step.
 
 #### DMA backend (`--features wifi-stats,wifi-dma`)
 
@@ -124,6 +139,6 @@ Re-run on 2026-11-15 with the cycle-counter guard (see below): Get Version 994 /
 |------------|---|----|----|----|----|-----|-----|-----|
 | Result | ok | ok | ok | ok | ok | ok | ok | ok |
 
-Latency figures were taken with a temporary debug build of the DMA transport (extra 8 us back-off in the RX wait loop); the stall sweep was repeated on the final code with the same result.
+All steps ran without errors.
 
 Note: ending a debug-probe session clears `DEMCR.TRCENA` and stops the cycle counter. The bench re-enables it before each run and inside the stall loop, so its numbers stay valid when flashed with `probe-rs`.

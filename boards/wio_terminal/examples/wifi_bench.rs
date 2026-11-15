@@ -18,10 +18,10 @@
 //! 3. Stall tolerance: both workloads are repeated while a 1 kHz timer
 //!    interrupt, which the wifi interrupts cannot preempt, keeps the CPU busy
 //!    for a growing number of microseconds. This emulates other interrupt
-//!    handlers or critical sections in an application. Each step
-//!    prints its label before it runs and `ok` after it; a transport that
-//!    drops bytes either reports errors or panics, which leaves the last
-//!    label on screen without a result.
+//!    handlers or critical sections in an application. Each step prints its
+//!    label before it runs and `ok` after it; a transport that drops bytes
+//!    either reports errors or panics, which leaves the last label on screen
+//!    without a result.
 //!
 //! For 1 and 2 the screen shows min/avg/max round trip time, the number of
 //! transport interrupts per RPC and the share of CPU time spent in the
