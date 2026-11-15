@@ -8,7 +8,7 @@ use nb;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use super::{TransportError, WifiUart, READ_SPIN_BUDGET};
+use super::{TransportError, WifiUart, INTER_BYTE_BUDGET};
 
 /// Set by the RX interrupt when a byte was lost (UART error, or the queue was
 /// full); taken by `read_exact`, which reports it as `TransportError::Rx`.
@@ -69,7 +69,10 @@ impl Transport {
                 }
             }
             Err(nb::Error::Other(_e)) => {
-                // Overflow, framing or parity error (the HAL clears the flag).
+                // Overflow, framing or parity error. `read` leaves the error
+                // flags and the received data in place, so without this the
+                // next `read` fails again and the interrupt never stops.
+                self.uart.flush_rx_buffer();
                 RX_ERROR.store(true, Ordering::Relaxed);
             }
             // Skip WouldBlock
@@ -112,10 +115,14 @@ impl Transport {
     }
 
     /// Blocks until `buffer` has been filled from the receive queue. Fails if
-    /// a received byte was lost, or if nothing arrives for
-    /// [`READ_SPIN_BUDGET`] polls.
-    pub fn read_exact(&mut self, mut buffer: &mut [u8]) -> Result<(), TransportError> {
-        let mut budget = READ_SPIN_BUDGET;
+    /// a received byte was lost, or if the first byte does not arrive within
+    /// `first_byte_budget` polls, or a later one within [`INTER_BYTE_BUDGET`].
+    pub fn read_exact(
+        &mut self,
+        mut buffer: &mut [u8],
+        first_byte_budget: u32,
+    ) -> Result<(), TransportError> {
+        let mut budget = first_byte_budget;
         while buffer.len() > 0 {
             if RX_ERROR.swap(false, Ordering::Relaxed) {
                 return Err(TransportError::Rx);
@@ -130,7 +137,7 @@ impl Transport {
                     continue;
                 }
             };
-            budget = READ_SPIN_BUDGET;
+            budget = INTER_BYTE_BUDGET;
             let b = r.buf();
             let copy_amt = if b.len() < buffer.len() {
                 b.len()

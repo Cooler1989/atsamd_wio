@@ -56,16 +56,24 @@ pub enum TransportError {
     /// The UART reported an overflow or framing error, or received bytes had
     /// to be dropped because the receive buffer was full.
     Rx,
-    /// Nothing arrived within the read budget (see [`READ_SPIN_BUDGET`]).
+    /// Nothing arrived within the read budget (see [`REPLY_WAIT_BUDGET`] and
+    /// [`INTER_BYTE_BUDGET`]).
     Timeout,
 }
 
-/// How many polling iterations `read_exact` waits for the next byte before
-/// giving up with [`TransportError::Timeout`]. One iteration is a few dozen
-/// CPU cycles, so at 120 MHz this is roughly 10-20 s: long enough for the
+// Read timeouts, counted in polling iterations because the transport owns no
+// timer. One iteration is roughly 50 CPU cycles (estimate, not calibrated),
+// so at 120 MHz:
+
+/// Wait for the first byte of a reply: about 10 s. Long enough for the
 /// slowest RPC (`WifiConnect` blocks on the RTL8720 until it has associated),
 /// short enough that a silent RTL8720 cannot hang the caller forever.
-pub const READ_SPIN_BUDGET: u32 = 50_000_000;
+pub const REPLY_WAIT_BUDGET: u32 = 24_000_000;
+
+/// Wait between bytes once a reply has started: about 10 ms. The RTL8720
+/// sends a frame back to back (16 us per byte), so a longer gap means bytes
+/// were lost and the frame will never complete.
+pub const INTER_BYTE_BUDGET: u32 = 24_000;
 
 /// UART pads for the labelled RX & TX pins
 pub type WifiUartPads = uart::Pads<Sercom0, IoSet2, WifiRx, WifiTx>;
@@ -248,7 +256,7 @@ impl Wifi {
             self.transport.discard_pending();
             return Err(erpc::Err::ResponseOverrun);
         }
-        if !self.read_ok(&mut buffer[..sz]) {
+        if !self.read_ok(&mut buffer[..sz], INTER_BYTE_BUDGET) {
             self.transport.discard_pending();
             return Err(erpc::Err::Unknown);
         }
@@ -266,7 +274,7 @@ impl Wifi {
         _rpc: &mut RPC,
     ) -> Result<erpc::FrameHeader, erpc::Err<RPC::Error>> {
         let mut buffer = [0u8; 4];
-        if !self.read_ok(&mut buffer) {
+        if !self.read_ok(&mut buffer, REPLY_WAIT_BUDGET) {
             self.transport.discard_pending();
             return Err(erpc::Err::Unknown);
         }
@@ -284,8 +292,8 @@ impl Wifi {
     }
 
     /// Non-generic so the error path is not duplicated per RPC type.
-    fn read_ok(&mut self, buffer: &mut [u8]) -> bool {
-        self.transport.read_exact(buffer).is_ok()
+    fn read_ok(&mut self, buffer: &mut [u8], first_byte_budget: u32) -> bool {
+        self.transport.read_exact(buffer, first_byte_budget).is_ok()
     }
 
     fn next_seq(&mut self) -> u32 {

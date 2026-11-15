@@ -13,7 +13,7 @@ use atsamd_hal::typelevel::NoneT;
 use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::NVIC;
 
-use super::{TransportError, WifiUart, WifiUartPads, READ_SPIN_BUDGET};
+use super::{TransportError, WifiUart, WifiUartPads, INTER_BYTE_BUDGET};
 
 pub const RX_RING_LEN: usize = 2048;
 pub type WifiRxChannel = Channel<Ch0, Ready>;
@@ -157,11 +157,16 @@ impl Transport {
 
     /// Blocks until `buffer` has been filled from the ring. Fails if the
     /// UART reports an overflow or framing error, if the DMA has overwritten
-    /// bytes not yet read (more than `RX_RING_LEN` unread), or if nothing
-    /// arrives for [`READ_SPIN_BUDGET`] polls.
-    pub fn read_exact(&mut self, buffer: &mut [u8]) -> Result<(), TransportError> {
+    /// bytes not yet read (more than `RX_RING_LEN` unread), or if the first
+    /// byte does not arrive within `first_byte_budget` polls, or a later one
+    /// within [`INTER_BYTE_BUDGET`].
+    pub fn read_exact(
+        &mut self,
+        buffer: &mut [u8],
+        first_byte_budget: u32,
+    ) -> Result<(), TransportError> {
+        let mut budget = first_byte_budget;
         for out in buffer.iter_mut() {
-            let mut budget = READ_SPIN_BUDGET;
             loop {
                 // Signed: a wrap caught at the exact moment the block completes
                 // can read one ring length behind for a poll; that means
@@ -184,6 +189,7 @@ impl Transport {
             let index = self.read_total as usize % RX_RING_LEN;
             *out = unsafe { core::ptr::read_volatile(self.ring.add(index)) };
             self.read_total = self.read_total.wrapping_add(1);
+            budget = INTER_BYTE_BUDGET;
         }
         Ok(())
     }
