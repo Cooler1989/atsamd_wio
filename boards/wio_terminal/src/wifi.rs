@@ -157,6 +157,8 @@ impl Wifi {
     /// Called from ISR: Handles the signal that the UART has recieved
     /// a byte that needs to be read.
     pub fn _handle_rx(&mut self) {
+        #[cfg(feature = "wifi-stats")]
+        let _stats = stats::IsrGuard::enter();
         match self.uart.read() {
             Ok(b) => {
                 if let Ok(mut wgr) = self.rx_buff_isr.grant_exact(1) {
@@ -177,6 +179,8 @@ impl Wifi {
     /// Called from ISR: Handles the signal that the outgoing UART buffer
     /// has room for the next byte.
     pub fn _handle_data_empty(&mut self) {
+        #[cfg(feature = "wifi-stats")]
+        let _stats = stats::IsrGuard::enter();
         if let Ok(rgr) = self.tx_buff_isr.read() {
             let buf = rgr.buf();
             self.uart.write(buf[0]).ok();
@@ -279,6 +283,60 @@ impl Wifi {
     fn next_seq(&mut self) -> u32 {
         self.sequence += 1;
         self.sequence
+    }
+}
+
+/// Transport instrumentation, used by the `wifi_bench` example to compare the
+/// interrupt-driven and DMA-driven UART backends.
+///
+/// Requires the DWT cycle counter to be running (see `wifi_bench`).
+#[cfg(feature = "wifi-stats")]
+pub mod stats {
+    use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+    use cortex_m::peripheral::DWT;
+
+    static ISR_COUNT: AtomicU32 = AtomicU32::new(0);
+    static ISR_CYCLES: AtomicU32 = AtomicU32::new(0);
+
+    /// Counters accumulated since the last [`reset`].
+    #[derive(Clone, Copy, Debug)]
+    pub struct Snapshot {
+        /// Number of wifi transport interrupt handler invocations.
+        pub isr_count: u32,
+        /// CPU cycles spent inside the handler bodies. Excludes exception
+        /// entry/exit, which costs roughly another 25-30 cycles per invocation.
+        pub isr_cycles: u32,
+    }
+
+    pub fn reset() {
+        ISR_COUNT.store(0, Relaxed);
+        ISR_CYCLES.store(0, Relaxed);
+    }
+
+    pub fn snapshot() -> Snapshot {
+        Snapshot {
+            isr_count: ISR_COUNT.load(Relaxed),
+            isr_cycles: ISR_CYCLES.load(Relaxed),
+        }
+    }
+
+    /// Accounts for one interrupt handler invocation; create it on entry to
+    /// the handler and let it drop on exit.
+    pub struct IsrGuard(u32);
+
+    impl IsrGuard {
+        #[inline(always)]
+        pub fn enter() -> Self {
+            Self(DWT::cycle_count())
+        }
+    }
+
+    impl Drop for IsrGuard {
+        #[inline(always)]
+        fn drop(&mut self) {
+            ISR_CYCLES.fetch_add(DWT::cycle_count().wrapping_sub(self.0), Relaxed);
+            ISR_COUNT.fetch_add(1, Relaxed);
+        }
     }
 }
 

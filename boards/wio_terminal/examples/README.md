@@ -90,4 +90,8 @@ Display Ferris centered on the screen. Maintain the correct orientation of the i
 Makes the Wio Terminal appear as a USB serial port. The screen can be written to by sending messages down the serial port.
 
 ### [`snake`](snake.rs)
-Generic snake game where you use the 5-way-switch to control the snake. 
+Generic snake game where you use the 5-way-switch to control the snake.
+
+### [`wifi_bench`](wifi_bench.rs)
+
+Benchmark the wifi UART transport: RPC round trip times, transport interrupt load, and tolerance to other interrupt handlers stalling the CPU. Results are shown on the LCD. Requires the `wifi-stats` feature.
