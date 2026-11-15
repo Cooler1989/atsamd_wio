@@ -12,3 +12,6 @@ Cargo.lock
 *.svd.patched
 .vscode
 __pycache__/
+
+# local wifi credentials
+WIFI_CRED.txt
