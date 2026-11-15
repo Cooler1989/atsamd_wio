@@ -6,7 +6,13 @@ use bbqueue::{BBBuffer, Consumer, Producer};
 use cortex_m::peripheral::NVIC;
 use nb;
 
-use super::{TransportError, WifiUart};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use super::{TransportError, WifiUart, READ_SPIN_BUDGET};
+
+/// Set by the RX interrupt when a byte was lost (UART error, or the queue was
+/// full); taken by `read_exact`, which reports it as `TransportError::Rx`.
+static RX_ERROR: AtomicBool = AtomicBool::new(false);
 
 pub struct Transport {
     uart: WifiUart,
@@ -58,11 +64,13 @@ impl Transport {
                     wgr[0] = b;
                     wgr.commit(1);
                 } else {
-                    panic!("overrun");
+                    // Queue full: the byte is lost.
+                    RX_ERROR.store(true, Ordering::Relaxed);
                 }
             }
             Err(nb::Error::Other(_e)) => {
-                panic!("unrecoverable read error");
+                // Overflow, framing or parity error (the HAL clears the flag).
+                RX_ERROR.store(true, Ordering::Relaxed);
             }
             // Skip WouldBlock
             Err(nb::Error::WouldBlock) => (),
@@ -95,18 +103,34 @@ impl Transport {
         Ok(())
     }
 
-    /// Nothing to do: the interrupt transport has no stale-data hazard.
-    pub fn discard_pending(&mut self) {}
+    /// Drops everything received so far, to resynchronise after an error.
+    pub fn discard_pending(&mut self) {
+        while let Ok(r) = self.rx_buff_input.read() {
+            let n = r.buf().len();
+            r.release(n);
+        }
+    }
 
-    /// Blocks until `buffer` has been filled from the receive queue.
+    /// Blocks until `buffer` has been filled from the receive queue. Fails if
+    /// a received byte was lost, or if nothing arrives for
+    /// [`READ_SPIN_BUDGET`] polls.
     pub fn read_exact(&mut self, mut buffer: &mut [u8]) -> Result<(), TransportError> {
+        let mut budget = READ_SPIN_BUDGET;
         while buffer.len() > 0 {
+            if RX_ERROR.swap(false, Ordering::Relaxed) {
+                return Err(TransportError::Rx);
+            }
             let r = match self.rx_buff_input.read() {
                 Ok(r) => r,
                 Err(_) => {
+                    budget -= 1;
+                    if budget == 0 {
+                        return Err(TransportError::Timeout);
+                    }
                     continue;
                 }
             };
+            budget = READ_SPIN_BUDGET;
             let b = r.buf();
             let copy_amt = if b.len() < buffer.len() {
                 b.len()

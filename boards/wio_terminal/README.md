@@ -79,6 +79,11 @@ disable_interrupts(|cs| unsafe {
 
 `blocking_rpc` and `connect_to_ap` are unchanged.
 
+Note for CI: the workspace builds this board with `cargo build --examples
+--all-features` (`crates.json`), which always selects `wifi-dma`, so CI does
+not build the interrupt transport. Build it locally with
+`cargo build --release --example wifi_connect --example wifi_scan`.
+
 ## Examples
 
 For information on building and flashing the examples to your device, as well as a list of all examples with brief explanations, please see the [examples README](examples/README.md).

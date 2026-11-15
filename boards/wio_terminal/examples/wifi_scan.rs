@@ -116,37 +116,31 @@ fn main() -> ! {
     textbuffer.truncate(0);
 
     let mut scans: u32 = 0;
+    let mut errors: u32 = 0;
+    let wifi = unsafe { WIFI.as_mut().unwrap() };
     loop {
         user_led.set_low().ok();
-        // Start scanning
-        unsafe {
-            WIFI.as_mut()
-                .map(|wifi| wifi.blocking_rpc(rpc::ScanStart {}).unwrap())
-                .unwrap()
-        };
-        // Block until the scan is complete
-        loop {
-            let scanning = unsafe {
-                WIFI.as_mut()
-                    .map(|wifi| wifi.blocking_rpc(rpc::IsScanning {}).unwrap())
-                    .unwrap()
-            };
-            if !scanning {
-                break;
+        // Start a scan, wait for it to finish and fetch the results. A failed
+        // RPC is counted and the scan retried, so the screen shows whether
+        // the link recovers instead of halting on the first error.
+        let result = (|| {
+            wifi.blocking_rpc(rpc::ScanStart {}).map_err(|_| ())?;
+            while wifi.blocking_rpc(rpc::IsScanning {}).map_err(|_| ())? {}
+            let num = wifi.blocking_rpc(rpc::ScanGetNumAPs {}).map_err(|_| ())?;
+            let aps = wifi
+                .blocking_rpc(rpc::ScanGetAP::<generic_array::typenum::consts::U16>::new())
+                .map_err(|_| ())?;
+            Ok::<_, ()>((num, aps))
+        })();
+        let (num, aps) = match result {
+            Ok(r) => r,
+            Err(()) => {
+                errors += 1;
+                writeln!(textbuffer, "errors: {}", errors).unwrap();
+                write_with_clear(&mut display, textbuffer.as_str(), 14, Point::new(90, 16));
+                textbuffer.truncate(0);
+                continue;
             }
-        }
-
-        let num = unsafe {
-            WIFI.as_mut()
-                .map(|wifi| wifi.blocking_rpc(rpc::ScanGetNumAPs {}).unwrap())
-                .unwrap()
-        };
-        let aps = unsafe {
-            WIFI.as_mut()
-                .map(|wifi| {
-                    wifi.blocking_rpc(rpc::ScanGetAP::<generic_array::typenum::consts::U16>::new())
-                })
-                .unwrap()
         };
         user_led.set_high().ok();
 
@@ -160,7 +154,7 @@ fn main() -> ! {
         write_with_clear(&mut display, textbuffer.as_str(), 3, Point::new(170, 3));
         textbuffer.truncate(0);
 
-        for (i, ap) in aps.unwrap().0.iter().enumerate() {
+        for (i, ap) in aps.0.iter().enumerate() {
             if i >= num as usize {
                 break;
             }

@@ -422,7 +422,7 @@ Findings:
 
 ### Phase 2 — DMA transport behind `wifi-dma`
 
-**Status: code complete; benchmark passes; `wifi_connect` check pending; the `wifi_scan` 5-minute check fails on BOTH backends (pre-existing, see 3).**
+**Status: done, except the `wifi_scan` 5-minute check, which fails on BOTH backends (pre-existing, see 3).** `wifi_connect` with `wifi-dma` obtained an IP address.
 
 Done:
 - Step 2.0 gate test passed (21-byte reply seen as write index 0 -> 21, ring starts with a valid frame header). Probe example deleted.
@@ -530,13 +530,13 @@ Checks:
 
 ### Phase 3 — Measure and document **[hardware]**
 
-**Status: steps 3-5 done; step 1 (final-code bench) waiting for the LCD reading.**
+**Status: done.** Final-code DMA bench: every stall step ok up to 400 us, `done` printed (latency lines not re-read; the debug-build figures in `examples/README.md` stand).
 
 - Step 1: the final DMA build (debug code removed) is flashed. `wifi_bench` now wraps long LCD lines so the 400 us result is visible (display only; the test is unchanged). Earlier debug-build result: every step ok up to 200 us, 400 us completed.
 - Step 3: `boards/wio_terminal/README.md` has a "DMA transport (`wifi-dma`)" section (what it does, DMA channels 0 and 1, the new `wifi_init` call). Its 400 us claim must be checked against step 1.
 - Step 4: `CHANGELOG.md` `[Unreleased]` has entries for `wifi-dma`, `wifi-stats`/`wifi_bench`, `bootloader`, and the wifi module split.
 - Step 5: CI (`crates.json` -> `cargo build --examples --all-features`, run by `.github/workflows/build-bsp.yml`) already builds every example with `wifi-dma`; the command passes locally. **Side effect: CI no longer builds the interrupt backend**, because `--all-features` always selects DMA, and the workflow runs the build string as one command, so it cannot chain a second build. Restoring coverage needs a workflow change (shared by all BSPs) or a `build` list in `crates.json`; not done.
-- **Must fix before upstreaming:** the `bootloader` feature (Phase 0 dev setup) makes `0x0` the default link address. For a published BSP that breaks every user who flashes through the UF2 bootloader. Invert it (e.g. a `no-bootloader` dev feature, default = bootloader layout) before a PR. Recorded as a breaking change in the CHANGELOG until then.
+- **Deferred by the owner:** the `bootloader` feature (Phase 0 dev setup) makes `0x0` the default link address. For a published BSP that breaks every user who flashes through the UF2 bootloader. Invert it (e.g. a `no-bootloader` dev feature, default = bootloader layout) before a PR. Recorded as a breaking change in the CHANGELOG until then.
 
 1. Run `wifi_bench` with `--features wifi-stats,wifi-dma`; record the screen
    next to the phase 0 table in `examples/README.md`.

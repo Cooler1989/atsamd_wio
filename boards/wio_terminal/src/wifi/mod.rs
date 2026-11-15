@@ -21,7 +21,7 @@ mod dma;
 #[cfg(feature = "wifi-dma")]
 use dma::Transport;
 #[cfg(feature = "wifi-dma")]
-pub use dma::{WifiRxChannel, WifiTxChannel, RX_RING_LEN};
+pub use dma::{_handle_dma_rx_wrap, WifiRxChannel, WifiTxChannel, RX_RING_LEN};
 
 pub use erpc::rpcs;
 use seeed_erpc as erpc;
@@ -53,8 +53,19 @@ pub struct Wifi {
 /// Errors reported by a wifi transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportError {
+    /// The UART reported an overflow or framing error, or received bytes had
+    /// to be dropped because the receive buffer was full.
     Rx,
+    /// Nothing arrived within the read budget (see [`READ_SPIN_BUDGET`]).
+    Timeout,
 }
+
+/// How many polling iterations `read_exact` waits for the next byte before
+/// giving up with [`TransportError::Timeout`]. One iteration is a few dozen
+/// CPU cycles, so at 120 MHz this is roughly 10-20 s: long enough for the
+/// slowest RPC (`WifiConnect` blocks on the RTL8720 until it has associated),
+/// short enough that a silent RTL8720 cannot hang the caller forever.
+pub const READ_SPIN_BUDGET: u32 = 50_000_000;
 
 /// UART pads for the labelled RX & TX pins
 pub type WifiUartPads = uart::Pads<Sercom0, IoSet2, WifiRx, WifiTx>;
@@ -232,6 +243,11 @@ impl Wifi {
         // Read the payload, check CRC, hand off to underlying trait to decode
         let mut buffer = [0u8; 2048];
         let sz = fh.msg_length as usize;
+        if sz > buffer.len() {
+            // A corrupt or oversized header; don't index out of range.
+            self.transport.discard_pending();
+            return Err(erpc::Err::ResponseOverrun);
+        }
         if !self.read_ok(&mut buffer[..sz]) {
             self.transport.discard_pending();
             return Err(erpc::Err::Unknown);
@@ -389,8 +405,8 @@ macro_rules! wifi_singleton {
     };
 }
 
-/// Declares static globals for the wifi controller (DMA transport; defines no
-/// interrupt handlers).
+/// Declares static globals for the wifi controller (DMA transport). Defines the
+/// `DMAC_0` handler, which counts receive-ring wraps; no UART interrupts.
 #[cfg(feature = "wifi-dma")]
 #[macro_export]
 macro_rules! wifi_singleton {
@@ -421,6 +437,12 @@ macro_rules! wifi_singleton {
                     &mut *core::ptr::addr_of_mut!(WIFI_RX_RING),
                 ));
             }
+        }
+
+        #[interrupt]
+        fn DMAC_0() {
+            // Receive ring wrapped (DMA channel 0 transfer complete).
+            _handle_dma_rx_wrap();
         }
     };
 }

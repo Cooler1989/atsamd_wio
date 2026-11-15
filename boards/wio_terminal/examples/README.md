@@ -122,8 +122,8 @@ Re-run on 2026-11-15 with the cycle-counter guard (see below): Get Version 994 /
 
 | Stall (us) | 0 | 10 | 20 | 30 | 50 | 100 | 200 | 400 |
 |------------|---|----|----|----|----|-----|-----|-----|
-| Result | ok | ok | ok | ok | ok | ok | ok | completed (result ran off the LCD; `done` printed) |
+| Result | ok | ok | ok | ok | ok | ok | ok | ok |
 
-Measured with a temporary debug build of the DMA transport (extra 8 us back-off in the RX wait loop); see `WIFI_DMA_PLAN.md`.
+Latency figures were taken with a temporary debug build of the DMA transport (extra 8 us back-off in the RX wait loop); the stall sweep was repeated on the final code with the same result.
 
 Note: ending a debug-probe session clears `DEMCR.TRCENA` and stops the cycle counter. The bench re-enables it before each run and inside the stall loop, so its numbers stay valid when flashed with `probe-rs`.
