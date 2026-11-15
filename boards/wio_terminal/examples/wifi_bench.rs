@@ -327,6 +327,10 @@ impl Console {
     fn partial(&mut self, args: core::fmt::Arguments) {
         let mut text = String::<64>::new();
         write!(text, "{}", args).ok();
+        // Wrap instead of drawing past the right edge of the 320 px screen.
+        if self.column > 0 && (3 + (self.column + text.len() as i32) * Self::COLUMN_WIDTH) > 320 {
+            self.newline();
+        }
 
         let position = Point::new(
             3 + self.column * Self::COLUMN_WIDTH,
