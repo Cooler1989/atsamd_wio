@@ -65,6 +65,8 @@ default = ["atsamd-hal/samd51p", "rt", "usb", "wifi"]
 rt = ["atsamd-hal/samd51p-rt", "cortex-m-rt"]
 usb = ["atsamd-hal/usb", "usb-device"]
 # enable feature for RTL8720 firmware older than 2.1.2
+# link behind the UF2 bootloader (first 16k reserved); default links at 0x0 for SWD development
+bootloader = []
 wifi-fw-before-212 = []
 wifi = ["bbqueue", "generic-array", "seeed-erpc"]
 # count interrupts and time spent in the wifi transport (used by wifi_bench)

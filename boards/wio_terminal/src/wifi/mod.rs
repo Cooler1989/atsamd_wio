@@ -2,15 +2,17 @@ use atsamd_hal::{
     clock::GenericClockController,
     delay::Delay,
     ehal::digital::OutputPin,
-    pac::{interrupt, Mclk},
+    pac::Mclk,
     prelude::*,
     sercom::{uart, IoSet2, Sercom0},
 };
-use bbqueue::{self, BBBuffer, Consumer, Producer};
+use bbqueue::{self, BBBuffer};
 
 use cortex_m::interrupt::CriticalSection;
 use cortex_m::peripheral::NVIC;
-use nb;
+
+mod irq;
+use irq::Transport;
 
 pub use erpc::rpcs;
 use seeed_erpc as erpc;
@@ -35,14 +37,14 @@ pub struct WifiPins {
 /// eRPC-based protocol to the RTL8720 chip
 pub struct Wifi {
     _pwr: WifiPwr,
-    uart: WifiUart,
-
-    rx_buff_isr: Producer<'static, 512>,
-    rx_buff_input: Consumer<'static, 512>,
-    tx_buff_isr: Consumer<'static, 128>,
-    tx_buff_input: Producer<'static, 128>,
-
+    transport: Transport,
     sequence: u32,
+}
+
+/// Errors reported by a wifi transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportError {
+    Rx,
 }
 
 /// UART pads for the labelled RX & TX pins
@@ -84,19 +86,12 @@ impl Wifi {
         OutputPin::set_high(&mut pwr).ok();
         delay.delay_ms(200u8);
 
-        let (rx_buff_isr, rx_buff_input) = rx_buff.try_split().unwrap();
-        let (tx_buff_input, tx_buff_isr) = tx_buff.try_split().unwrap();
-
         let sequence = 0;
 
         let uart = uart.enable();
         Wifi {
             _pwr: pwr,
-            uart,
-            rx_buff_isr,
-            rx_buff_input,
-            tx_buff_isr,
-            tx_buff_input,
+            transport: Transport::new(uart, rx_buff, tx_buff),
             sequence,
         }
     }
@@ -105,14 +100,7 @@ impl Wifi {
     /// initializing the rest of your peripherals but before you start
     /// issuing RPCs against the wifi chip.
     pub fn enable(&mut self, _cs: &CriticalSection, nvic: &mut NVIC) {
-        unsafe {
-            nvic.set_priority(interrupt::SERCOM0_0, 1);
-            NVIC::unmask(interrupt::SERCOM0_0);
-            nvic.set_priority(interrupt::SERCOM0_2, 1);
-            NVIC::unmask(interrupt::SERCOM0_2);
-        }
-
-        self.uart.enable_interrupts(uart::Flags::RXC);
+        self.transport.enable(nvic);
     }
 
     /// Convenience function to connection an access point with the given
@@ -157,37 +145,13 @@ impl Wifi {
     /// Called from ISR: Handles the signal that the UART has recieved
     /// a byte that needs to be read.
     pub fn _handle_rx(&mut self) {
-        #[cfg(feature = "wifi-stats")]
-        let _stats = stats::IsrGuard::enter();
-        match self.uart.read() {
-            Ok(b) => {
-                if let Ok(mut wgr) = self.rx_buff_isr.grant_exact(1) {
-                    wgr[0] = b;
-                    wgr.commit(1);
-                } else {
-                    panic!("overrun");
-                }
-            }
-            Err(nb::Error::Other(e)) => {
-                panic!("unrecoverable read error");
-            }
-            // Skip WouldBlock
-            Err(nb::Error::WouldBlock) => (),
-        };
+        self.transport.handle_rx();
     }
 
     /// Called from ISR: Handles the signal that the outgoing UART buffer
     /// has room for the next byte.
     pub fn _handle_data_empty(&mut self) {
-        #[cfg(feature = "wifi-stats")]
-        let _stats = stats::IsrGuard::enter();
-        if let Ok(rgr) = self.tx_buff_isr.read() {
-            let buf = rgr.buf();
-            self.uart.write(buf[0]).ok();
-            rgr.release(1);
-        } else {
-            self.uart.disable_interrupts(uart::Flags::DRE);
-        }
+        self.transport.handle_data_empty();
     }
 
     /// Issues an RPC, blocking till a response is recieved.
@@ -221,7 +185,9 @@ impl Wifi {
         // Read the payload, check CRC, hand off to underlying trait to decode
         let mut buffer = [0u8; 2048];
         let sz = fh.msg_length as usize;
-        self.recieve_bytes(&mut buffer[..sz]);
+        if !self.read_ok(&mut buffer[..sz]) {
+            return Err(erpc::Err::Unknown);
+        }
 
         fh.check_crc(&buffer[..sz])?;
         rpc.parse(&buffer[..sz])
@@ -232,7 +198,9 @@ impl Wifi {
         _rpc: &mut RPC,
     ) -> Result<erpc::FrameHeader, erpc::Err<RPC::Error>> {
         let mut buffer = [0u8; 4];
-        self.recieve_bytes(&mut buffer);
+        if !self.read_ok(&mut buffer) {
+            return Err(erpc::Err::Unknown);
+        }
 
         match erpc::FrameHeader::parse(&buffer[..]) {
             Err(e) => Err(erpc::Err::Parsing(e)),
@@ -240,44 +208,15 @@ impl Wifi {
         }
     }
 
-    fn recieve_bytes(&mut self, mut buffer: &mut [u8]) {
-        while buffer.len() > 0 {
-            let r = match self.rx_buff_input.read() {
-                Ok(r) => r,
-                Err(_) => {
-                    continue;
-                }
-            };
-            let b = r.buf();
-            let copy_amt = if b.len() < buffer.len() {
-                b.len()
-            } else {
-                buffer.len()
-            };
-
-            for (i, b) in b[..copy_amt].iter().enumerate() {
-                buffer[i] = *b;
-            }
-            buffer = &mut buffer[copy_amt..];
-
-            r.release(copy_amt);
-        }
-    }
-
-    fn write_frame(&mut self, msg: &heapless::Vec<u8, 64>) -> Result<(), ()> {
+    fn write_frame(&mut self, msg: &heapless::Vec<u8, 64>) -> Result<(), TransportError> {
         let header = erpc::FrameHeader::new_from_msg(msg);
-        self.tx(header.as_bytes().iter().chain(msg));
-        Ok(())
+        self.transport.write(&header.as_bytes())?;
+        self.transport.write(msg)
     }
 
-    fn tx<'a, D: Iterator<Item = &'a u8>>(&mut self, data: D) {
-        for b in data {
-            if let Ok(mut wgr) = self.tx_buff_input.grant_exact(1) {
-                wgr[0] = *b;
-                wgr.commit(1);
-            }
-            self.uart.enable_interrupts(uart::Flags::DRE);
-        }
+    /// Non-generic so the error path is not duplicated per RPC type.
+    fn read_ok(&mut self, buffer: &mut [u8]) -> bool {
+        self.transport.read_exact(buffer).is_ok()
     }
 
     fn next_seq(&mut self) -> u32 {

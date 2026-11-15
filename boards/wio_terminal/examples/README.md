@@ -95,3 +95,18 @@ Generic snake game where you use the 5-way-switch to control the snake.
 ### [`wifi_bench`](wifi_bench.rs)
 
 Benchmark the wifi UART transport: RPC round trip times, transport interrupt load, and tolerance to other interrupt handlers stalling the CPU. Results are shown on the LCD. Requires the `wifi-stats` feature.
+
+#### interrupt backend
+
+Baseline: firmware 2.1.3, 614400 baud, header `wifi_bench [ijrq]`. Copied from the LCD.
+
+| Test | Count | Errors | us min / avg / max | ISRs per RPC | ISR CPU |
+|------|-------|--------|--------------------|--------------|---------|
+| Get Version | 200 | 0 | 994 / 1000 / 1034 | 35 | 4.2% |
+| ScanGetAP | 20 | 0 | 19888 / 20008 / 20040 | 1028 | 7.1% |
+
+1 kHz stall test (us stalled per ms):
+
+| Stall (us) | 0 | 10 | 20 | 30 | 50 |
+|------------|---|----|----|----|----|
+| Result | ok | ok | ok | ok | freezes (stalls at 50) |

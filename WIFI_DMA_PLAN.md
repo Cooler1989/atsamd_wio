@@ -373,6 +373,33 @@ Checks:
   (`text`/`bss`).
 - **[hardware]** `wifi_bench` numbers match phase 0 within noise.
 
+**Status: done, hardware check pending the LCD readout.**
+
+Findings:
+
+- **Size.** The plan's refactor as written costs +1236 bytes of `text`
+  (14324 -> 15560), outside the ±200 limit. The baseline was reproduced
+  exactly (14324/708) by rebuilding the original `wifi.rs`, so the growth is
+  from the refactor, not the environment. Two causes:
+  1. Building one `Vec<u8, 68>` for header + message (~400 bytes). Fixed by
+     calling `transport.write` twice (header, then message).
+  2. `read_exact(..).map_err(|_| erpc::Err::Unknown)?` inside the generic
+     `recieve_*` functions (~840 bytes): the error path is duplicated for
+     every RPC type. Fixed by a small non-generic `Wifi::read_ok` helper that
+     returns a `bool`; the generic code only does
+     `if !ok { return Err(erpc::Err::Unknown) }`. Do not mark it
+     `#[inline(never)]`: that measured larger (14580 vs 14488).
+  Final: `wifi_connect` 14488 text / 708 bss (+164 bytes).
+- Phase 2 should reuse that pattern: keep error handling out of the generic
+  RPC functions.
+- `write_frame` therefore does not build a single `Vec<u8, 68>`; deviation
+  from step 3 of this phase, intentional.
+- `src/wifi.rs` -> `src/wifi/mod.rs` + `src/wifi/irq.rs`; `Transport` and
+  `TransportError` as specified. No unused imports left in the wifi module
+  (checked with warnings temporarily enabled).
+- Builds: standard check passes, `wifi_bench --features wifi-stats` passes,
+  and `--features wifi-stats,bootloader` passes.
+
 ### Phase 2 — DMA transport behind `wifi-dma`
 
 **Step 2.0 — gate test for risk R1 [hardware].** Before writing the transport,
@@ -508,10 +535,16 @@ Changed in `atsamd/boards/wio_terminal` (uncommitted):
 | File | Change |
 |---|---|
 | `examples/wifi_bench.rs` | New benchmark (section 5). |
-| `src/wifi.rs` | `stats` module and one guard line in each interrupt handler, all under `wifi-stats`. |
+| `src/wifi/mod.rs`, `src/wifi/irq.rs` | Phase 1 split (was `src/wifi.rs`). `stats` module and one guard line in each interrupt handler, all under `wifi-stats`. |
 | `src/lib.rs` | Re-export `wifi_stats` under the feature. |
-| `Cargo.toml` | `wifi-stats` feature; `wifi_bench` example entry. |
+| `Cargo.toml` | `bootloader` feature (see below); `wifi-stats` feature; `wifi_bench` example entry. |
 | `examples/README.md` | Entry for `wifi_bench`. |
+
+Dev setup changes made in Phase 0:
+
+- `.cargo/config.toml` runner is now `probe-rs run --chip ATSAMD51P19A --protocol swd` (J-Link). The old gdb runner is a comment.
+- The board's UF2 bootloader (first 16K) was found erased, so firmware is linked at 0x0 by default. `memory-nobootloader.x` is that layout; `memory-bootloader.x` is the old 16K-offset one, selected by `--features bootloader` in `build.rs`. Production builds must use `bootloader`, and the bootloader has to be restored first.
+- Phase 0 baseline is in `examples/README.md`.
 
 Verified here: `wifi_bench`, `wifi_connect` and `wifi_scan` build in release;
 a throwaway DMA spike using exactly the types and code blocks of section 3
