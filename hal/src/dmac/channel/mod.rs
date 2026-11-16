@@ -217,6 +217,9 @@ impl<Id: ChId, S: Status> Channel<Id, S> {
     }
 
     /// Selectively enable interrupts
+    ///
+    /// On a channel converted with `Channel::into_blocking`, do not enable
+    /// any: the async DMAC interrupt handler would stop the channel.
     #[inline]
     pub fn enable_interrupts(&mut self, flags: InterruptFlags) {
         // SAFETY: This is safe as InterruptFlags is only capable of writing in
@@ -614,6 +617,29 @@ impl<Id: ChId> From<Channel<Id, Ready>> for Channel<Id, Uninitialized> {
     fn from(mut item: Channel<Id, Ready>) -> Self {
         item._reset_private();
         item.change_status()
+    }
+}
+
+#[cfg(feature = "async")]
+impl<Id: ChId> Channel<Id, UninitializedFuture> {
+    /// Take a channel of an `async` [`DmaController`](super::DmaController)
+    /// for blocking (polled) use with a [`Transfer`](super::Transfer).
+    ///
+    /// This lets one controller serve both `async` transfers and transfers
+    /// that never complete, such as a circular receive into a ring buffer,
+    /// which the `async` API cannot express.
+    ///
+    /// The `async` DMAC interrupt handler acts on every channel with a
+    /// pending *enabled* interrupt: it disables the channel and wakes its
+    /// waker. A channel converted here must therefore keep its interrupts
+    /// disabled (the reset state left by [`init`](Channel::init)); poll
+    /// [`Transfer::complete`](super::Transfer::complete) or the channel
+    /// flags instead. Helpers that enable the transfer-complete interrupt,
+    /// such as `Uart::receive_with_dma` / `send_with_dma`, must not be used
+    /// with it.
+    #[inline]
+    pub fn into_blocking(self) -> Channel<Id, Uninitialized> {
+        self.change_status()
     }
 }
 

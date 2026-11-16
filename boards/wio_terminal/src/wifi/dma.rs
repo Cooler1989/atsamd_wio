@@ -50,7 +50,8 @@ pub struct Transport {
 // The raw pointer refers to a `'static` buffer that is only written by DMA.
 unsafe impl Send for Transport {}
 
-/// Index in the ring where the DMA will write the next byte.
+/// Index in the ring where the DMA on `channel` (receiving into a ring of
+/// [`RX_RING_LEN`] bytes) will write the next byte.
 ///
 /// The DMAC only writes a channel's descriptor back to memory when another
 /// channel takes over, so the write-back BTCNT can be stale while this channel
@@ -58,15 +59,15 @@ unsafe impl Send for Transport {}
 /// channel even after `ABUSY` clears, so it is trusted whenever its ID is the
 /// RX channel. The two registers are not read atomically, so retry until
 /// `ACTIVE` is unchanged around the read.
-fn write_index() -> usize {
+pub(super) fn write_index(channel: usize) -> usize {
     let dmac = unsafe { pac::Dmac::steal() };
     let remaining = loop {
         let before = dmac.active().read();
-        let remaining = if before.id().bits() as usize == RX_CHANNEL {
+        let remaining = if before.id().bits() as usize == channel {
             before.btcnt().bits()
         } else {
             let writeback = dmac.wrbaddr().read().bits() as *const u8;
-            unsafe { core::ptr::read_volatile(writeback.add(RX_CHANNEL * 16 + 2) as *const u16) }
+            unsafe { core::ptr::read_volatile(writeback.add(channel * 16 + 2) as *const u16) }
         };
         if dmac.active().read().bits() == before.bits() {
             break remaining as usize;
@@ -92,7 +93,7 @@ fn written_total() -> u32 {
     loop {
         let wraps = RX_WRAPS.load(Ordering::Relaxed);
         let pending = flags.read().tcmpl().bit_is_set();
-        let index = write_index();
+        let index = write_index(RX_CHANNEL);
         if flags.read().tcmpl().bit_is_set() == pending && RX_WRAPS.load(Ordering::Relaxed) == wraps
         {
             return (wraps + pending as u32)

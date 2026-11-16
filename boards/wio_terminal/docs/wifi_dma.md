@@ -1,7 +1,9 @@
 # Wifi DMA transport
 
 How the `wifi-dma` feature moves the Wio Terminal's wifi UART from per-byte
-interrupts to DMA, and why it is built the way it is.
+interrupts to DMA, and why it is built the way it is. It covers both clients
+of the UART: the blocking `Wifi` RPC API and the async client
+(`wifi_async::Client`, see [Async client](#async-client)).
 
 ## Why
 
@@ -186,16 +188,202 @@ flowchart LR
   and the data in place, so without the flush every later `read()` fails and
   the RX interrupt fires forever. The old code hid this by panicking.
 
+## Async client
+
+Everything above is about the blocking `Wifi` API, where the caller spins
+until the reply is in. Firmware built on a cooperative executor (Embassy, as
+in `rust_ot_wio`) cannot spin for up to 10 s, so the crate also has an async
+client, `wifi_async::Client`, in `src/wifi/asynchronous.rs`.
+
+### The concept
+
+The client does the same eRPC work as `Wifi` (framing, sequence numbers,
+CRC, skipping replies that are not ours), but never blocks. It talks to the
+UART through a small non-blocking trait:
+
+```rust
+pub trait ByteTransport {
+    fn try_write(&mut self, data: &[u8]) -> usize; // bytes accepted, may be 0
+    fn try_read(&mut self, data: &mut [u8]) -> usize; // bytes copied, may be 0
+    fn fault(&self) -> Option<TransportError>;      // latched RX overflow / UART error
+    fn drain(&mut self);                            // drop everything readable
+}
+```
+
+`Client::rpc(rpc, wait)` loops over `try_write` until the request is out,
+then over `try_read` until the reply frame is complete. Between two calls it
+awaits `wait()`, a closure supplied by the caller that yields to the executor
+(for example, sleeps 1 ms) and returns `false` once the request's deadline
+has passed. So the transport is polled, never awaited: it needs no waker and
+no interrupt to make progress, only a task that comes back regularly.
+
+```mermaid
+sequenceDiagram
+    participant Task as RPC task
+    participant C as wifi_async::Client
+    participant T as ByteTransport
+    participant Ex as executor (wait)
+
+    Task->>C: rpc(GetIPInfo, wait).await
+    loop until header + message are accepted
+        C->>Ex: wait().await (yield, deadline check)
+        C->>T: fault()?
+        C->>T: try_write(rest of request)
+    end
+    loop until the reply frame is complete
+        C->>Ex: wait().await
+        C->>T: fault()?
+        C->>T: try_read(rest of frame)
+    end
+    C->>C: CRC, sequence, parse
+    C-->>Task: Ok(ip info)
+```
+
+Failure rules, the same for both backends:
+
+- A timeout (`wait` returned `false`), a transport fault, a malformed frame or
+  a dropped (cancelled) `rpc` future **poisons** the client: every later call
+  returns `Error::Unavailable`. A well-formed reply in which the radio reports
+  failure (`Error::Rpc(RPCErr)`) does not poison it.
+- Recovery is the owner's job: power-cycle the radio (`set_power(false)`,
+  wait, `set_power(true)`), clear the latched fault (`reset_fault()`), then
+  `Client::recover()`, which calls `drain()` and re-arms the client.
+
+### Two backends, one client
+
+The client is split from the parts that own the hardware. Which pair you get
+depends on `wifi-dma`:
+
+| | Interrupt transport (default) | DMA transport (`wifi-dma`) |
+|---|---|---|
+| Constructor | `Wifi::init(.., &RX, &TX).into_async()` | `Wifi::init_async(.., rx_ch, tx_ch, &mut BUFFERS)` |
+| Task side (`ByteTransport`) | `WifiIo`: bbqueue consumer/producer | `WifiIo<RxId, TxId>`: DMA ring reader, TX DMA |
+| Owner side | `WifiInterrupts`: UART, power pin, ISR bodies | `WifiControl`: power pin only |
+| Interrupts | `SERCOM0_0` → `on_tx`, `SERCOM0_2` → `on_rx`; call `enable` | none |
+| Static storage | `BBBuffer<512>` + `BBBuffer<128>` | `WifiDmaBuffers` (2 KiB ring + 256 B TX) |
+| DMA channels | none | any two, chosen by the caller |
+| Faults latched in | `ASYNC_FAULT` / `LAST_UART_ERROR` | the same statics |
+
+Both owner types have `set_power` and `reset_fault`, and both `WifiIo`s
+report the same `TransportError`s, so code above the client changes only in
+construction.
+
+### The async DMA transport
+
+`src/wifi/dma_async.rs`. It reuses the receive ring and the write-position
+logic of the blocking DMA transport (`dma.rs`,
+[Reading the write position](#reading-the-write-position)), with two
+differences that come from where it runs.
+
+**It must share the DMA controller.** An async application already runs the
+DMAC in `async` mode (`DmaController::into_future`) for other peripherals.
+In `rust_ot_wio` that is the OpenTherm edge capture on channels 0 and 1. The
+HAL's `async` DMAC interrupt handler runs for every channel that has a
+pending *enabled* interrupt (`INTSTATUS` only reports those). On a transfer
+complete it **disables the channel** and wakes its waker. A circular receive
+with the transfer-complete interrupt on, as the blocking transport uses for
+`DMAC_0`, would be stopped at its first wrap. So:
+
+- The two channels are taken from the `async` controller and converted with
+  `Channel::into_blocking()`, a small addition to this HAL fork, then
+  `init`ed as usual. `init` resets the channel, which leaves all its
+  interrupts disabled, and the transport never enables one. The async
+  handler never sees these channels.
+- The channels are generic (`WifiIo<RxId, TxId>`), so the application picks
+  free ones. `rust_ot_wio` uses 2 (RX) and 3 (TX).
+
+**Ring wraps are counted by polling, not by an interrupt.** In the circular
+transfer the channel's transfer-complete flag (`CHINTFLAG.TCMPL`) is still
+set at every wrap, even with the interrupt disabled. `written_total()` (called
+from `try_read`) takes that flag:
+
+```text
+if TCMPL set:  clear it; wraps += 1        (clear first, then read the position)
+written_total = wraps × 2048 + write index
+unread        = written_total − read_total (signed)
+
+  unread ≤ 0          → nothing new (also: a wrap that landed between the
+                        flag and the position; counted on the next poll)
+  0 < unread ≤ 2048   → copy min(unread, wanted) bytes
+  unread > 2048       → overwritten: latch RxOverflow
+after the copy: re-read written_total; if the DMA lapped the bytes just
+copied, latch RxOverflow instead of returning them
+```
+
+The flag is only one bit, so this counts correctly as long as the ring wraps
+at most once between two polls. During an RPC the client polls on every
+`wait()`, about once per millisecond in `rust_ot_wio`, and at 614400 baud
+the ring takes about 33 ms to fill. If the task is held off for longer than
+that while a reply is arriving, bytes are lost anyway. A double wrap can then
+go unnoticed by the count, and the eRPC frame CRC rejects the frame instead.
+
+**Each request starts from a clean ring.** Between RPCs nobody polls, so
+the wrap count can fall behind. It doesn't matter: the first `try_write`
+after a read phase calls `resync()` (`read_total = written_total()`). Nothing
+received before a request is sent can be its reply (late replies to an
+abandoned request, callbacks, noise), so dropping it is correct, and the
+counting restarts from a consistent base. `drain()` (used by
+`Client::recover`) does the same.
+
+**Transmit is a one-shot DMA started from `try_write`.**
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Busy: try_write(bytes)<br/>copy ≤ 256 B into the TX buffer,<br/>start DMA (SERCOM0 TX trigger), return count
+    Busy --> Busy: try_write → 0<br/>(channel still enabled)
+    Busy --> Idle: try_write / next poll sees<br/>CHCTRLA.ENABLE cleared (block done)
+```
+
+The client sends the 4-byte frame header and the message as two
+`try_write` calls, so a request is two DMA transfers. Completion is detected
+the way the HAL's blocking transfers detect it: the hardware clears the
+channel's enable bit at the end of a non-circular block. No interrupt is
+needed.
+
+**Faults.** `try_read` checks `SERCOM0.STATUS` (BUFOVF, FERR, PERR) and
+latches `TransportError::Uart`, recording the kind for `last_uart_error()`.
+A ring overrun latches `TransportError::RxOverflow`. Like the interrupt
+backend, a fault stays latched (`try_read`/`try_write` return 0) until
+`WifiControl::reset_fault()`.
+
+### Using it
+
+```rust
+static mut BUFFERS: WifiDmaBuffers = WifiDmaBuffers::new();
+
+// One `async` DMA controller for the whole firmware.
+let channels = DmaController::init(dmac, &mut pm).into_future(DmacIrqs).split();
+let rx = channels.2.into_blocking().init(PriorityLevel::Lvl3);
+let tx = channels.3.into_blocking().init(PriorityLevel::Lvl0);
+
+let (mut client, mut control) = Wifi::init_async(
+    wifi_pins, sercom0, &mut clocks, &mut mclk, &mut delay,
+    rx, tx,
+    unsafe { &mut *core::ptr::addr_of_mut!(BUFFERS) }, // once
+);
+// Nothing to enable, no handler to bind.
+let ip = client.rpc(rpcs::GetIPInfo { interface: L3Interface::Station }, wait).await;
+```
+
+RX gets the highest priority because the UART holds only two received bytes.
+In `rust_ot_wio` this is behind its own `wifi-dma` feature
+(`src/platform/network.rs`, `platform::ot_ports::dma_channels`).
+
 ## Resources
 
-| | Interrupt transport | DMA transport |
-|---|---|---|
-| RAM (`wifi_connect` bss) | 708 B | 2576 B (+1868: the 2 KiB ring) |
-| Flash (`wifi_connect` text) | 15000 B | 15564 B |
-| DMA channels | none | 0 (RX), 1 (TX) |
-| Interrupts | `SERCOM0_0`, `SERCOM0_2` | `DMAC_0` |
-| Interrupts per received byte | 1 | 1 / 2048 |
-| HAL feature | none | `atsamd-hal/dma` |
+| | Interrupt transport | DMA transport | Async DMA transport |
+|---|---|---|---|
+| RAM (`wifi_connect` bss) | 708 B | 2576 B (+1868: the 2 KiB ring) | ring + 256 B TX buffer |
+| Flash (`wifi_connect` text) | 15000 B | 15564 B | — |
+| DMA channels | none | 0 (RX), 1 (TX) | any two (caller's choice) |
+| Interrupts | `SERCOM0_0`, `SERCOM0_2` | `DMAC_0` | none |
+| Interrupts per received byte | 1 | 1 / 2048 | 0 |
+| HAL feature | none | `atsamd-hal/dma` | `atsamd-hal/dma` (+ `async` to share the controller) |
+
+In `rust_ot_wio`'s `boiler_controller` (release build, Wi-Fi + MQTT + log +
+cmd + fetch + SD), switching from the interrupt to the async DMA transport
+changes text by −360 B and bss by +1648 B.
 
 ## Known limits
 
@@ -210,6 +398,20 @@ flowchart LR
   interrupt transport fails the same soak test (queue overrun). The cause is
   unknown. It now produces a failed RPC and a retry, not a hang. Ruled out:
   polling rate, the TX DMA channel, an attached debugger, stale write-back.
+- **The async DMA transport is build-tested only**, not yet run on the board.
+  It relies on `CHINTFLAG.TCMPL` being set at every wrap of a circular
+  transfer with its interrupt disabled. The datasheet ties the flag to the
+  block action. The descriptors use `BLOCKACT = NOACT`, the same as the
+  blocking transport, which counts wraps from the same flag and passed
+  multi-minute soak tests that wrap the ring many times.
+- **Wrap counting by polling** undercounts if the ring wraps twice between
+  two polls during an RPC (task held off for more than ~33 ms while a reply
+  arrives). The frame CRC then rejects the corrupted frame.
+- **`wifi_singleton!` and `wifi-dma`:** with the feature on, the blocking
+  singleton takes channels 0 and 1 and binds `DMAC_0`. That conflicts with
+  an application that runs the DMAC in `async` mode, so such an application
+  uses only the async transport. Blocking examples built in the same crate
+  with `wifi-dma` must pass the DMA channels.
 - **Debugging tip:** ending a `probe-rs` session clears `DEMCR.TRCENA`, which
   stops the DWT cycle counter after the firmware enabled it. `wifi_bench`
   re-enables it before each measurement.

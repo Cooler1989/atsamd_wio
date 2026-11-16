@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(dmac)* `Channel<Id, UninitializedFuture>::into_blocking()`: use a channel of an `async` DMA controller for a polled (blocking-API) transfer, such as a circular receive. The channel must keep its interrupts disabled.
+
 ## [0.23.3](https://github.com/atsamd-rs/atsamd/compare/atsamd-hal-0.23.2...atsamd-hal-0.23.3) - 2026-03-02
 
 ### Fixed

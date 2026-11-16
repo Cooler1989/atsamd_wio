@@ -10,7 +10,6 @@ use atsamd_hal::{
 use atsamd_hal::pac::interrupt;
 #[cfg(not(feature = "wifi-dma"))]
 use bbqueue::{BBBuffer, Consumer, Producer};
-#[cfg(not(feature = "wifi-dma"))]
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use cortex_m::interrupt::CriticalSection;
@@ -26,6 +25,10 @@ mod dma;
 use dma::Transport;
 #[cfg(feature = "wifi-dma")]
 pub use dma::{_handle_dma_rx_wrap, WifiRxChannel, WifiTxChannel, RX_RING_LEN};
+#[cfg(feature = "wifi-dma")]
+mod dma_async;
+#[cfg(feature = "wifi-dma")]
+pub use dma_async::{WifiControl, WifiDmaBuffers, WifiIo, TX_CHUNK_LEN};
 
 pub use erpc::rpcs;
 use seeed_erpc as erpc;
@@ -91,21 +94,22 @@ pub type WifiUartPads = uart::Pads<Sercom0, WifiRx, WifiTx>;
 /// UART device for the labelled RX & TX pins
 pub type WifiUart = uart::Uart<uart::Config<WifiUartPads>, uart::Duplex>;
 
-// The async split (`Wifi::into_async`, `WifiIo`, `WifiInterrupts`) drives the
-// UART from the SERCOM0 interrupts, so it is only available on the interrupt
-// transport, not with `wifi-dma`.
+// The async split has one backend per transport, chosen by `wifi-dma`:
+// - interrupt transport: `Wifi::init(..).into_async()` gives `WifiIo` (bbqueue
+//   halves) and `WifiInterrupts` (UART owner, SERCOM0 handlers);
+// - DMA transport: `Wifi::init_async(..)` gives `WifiIo<RxId, TxId>` (DMA ring
+//   and one-shot TX) and `WifiControl` (power and fault control only).
+// Both latch faults in the statics below; see `docs/wifi_dma.md`.
 
-// The board has one radio/UART. Latch ISR faults until its next initialization.
-#[cfg(not(feature = "wifi-dma"))]
+// The board has one radio/UART. Latch transport faults until the next
+// `reset_fault`: 0 none, 1 receive overflow, 2 UART error.
 static ASYNC_FAULT: AtomicU8 = AtomicU8::new(0);
-/// Kind of the last UART error seen by the interrupt handlers (kept across
+/// Kind of the last UART error latched by an async transport (kept across
 /// `reset_fault`, for diagnostics): 0 none, 1 RX overflow, 2 frame, 3 parity,
 /// 4 other RX error, 5 TX error.
-#[cfg(not(feature = "wifi-dma"))]
 static LAST_UART_ERROR: AtomicU8 = AtomicU8::new(0);
 
-/// Text for the last UART error the radio interrupt handlers latched.
-#[cfg(not(feature = "wifi-dma"))]
+/// Text for the last UART error an async transport latched.
 pub fn last_uart_error() -> &'static str {
     match LAST_UART_ERROR.load(Ordering::Relaxed) {
         0 => "UART",
@@ -360,6 +364,31 @@ impl Wifi {
             transport: Transport::new(uart, rx_buff, tx_buff),
             sequence: 0,
         }
+    }
+
+    /// Initializes the radio for the async client on the DMA transport.
+    ///
+    /// The DMA counterpart of `Wifi::init(..).into_async()`. The two channels
+    /// can be any the application owns; they may come from an `async`
+    /// `DmaController` through `Channel::into_blocking`, because this
+    /// transport never enables a DMA interrupt. No interrupt handler has to be
+    /// bound and there is nothing to enable: the returned client works as
+    /// soon as this returns. `buffers` must be used for nothing else.
+    #[cfg(feature = "wifi-dma")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn init_async<RxId: atsamd_hal::dmac::ChId, TxId: atsamd_hal::dmac::ChId>(
+        pins: WifiPins,
+        sercom0: Sercom0,
+        clocks: &mut GenericClockController,
+        mclk: &mut Mclk,
+        delay: &mut Delay,
+        rx_channel: atsamd_hal::dmac::Channel<RxId, atsamd_hal::dmac::Ready>,
+        tx_channel: atsamd_hal::dmac::Channel<TxId, atsamd_hal::dmac::Ready>,
+        buffers: &'static mut WifiDmaBuffers,
+    ) -> (crate::wifi_async::Client<WifiIo<RxId, TxId>>, WifiControl) {
+        let (pwr, uart) = Self::start_uart(pins, sercom0, clocks, mclk, delay);
+        let (io, control) = dma_async::new(pwr, uart, rx_channel, tx_channel, buffers);
+        (crate::wifi_async::Client::new(io), control)
     }
 
     #[cfg(feature = "wifi-dma")]

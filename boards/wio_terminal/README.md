@@ -117,9 +117,15 @@ disable_interrupts(|cs| unsafe {
 });
 ```
 
-`blocking_rpc` and `connect_to_ap` are unchanged. `Wifi::into_async` (and
-`WifiIo` / `WifiInterrupts`) needs the interrupt transport and is not
-available with `wifi-dma`.
+`blocking_rpc` and `connect_to_ap` are unchanged.
+
+For the async client, `wifi-dma` replaces `Wifi::into_async` with
+`Wifi::init_async`. It takes any two DMA channels and a static
+`WifiDmaBuffers`, and returns a `wifi_async::Client<WifiIo<RxId, TxId>>` and a
+`WifiControl` (power and fault control). This transport uses no interrupt at
+all, not even `DMAC_0`, so its channels can come from a DMA controller that
+other code runs in `async` mode: convert them with `Channel::into_blocking()`
+before `init`. See [docs/wifi_dma.md](docs/wifi_dma.md#async-client).
 
 On both transports, receive errors and timeouts are returned as RPC errors
 instead of panicking: a lost byte, a UART overflow or framing error, a reply
