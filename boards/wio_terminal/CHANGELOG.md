@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- *(wio_terminal)* Wifi DMA transports: count receive-ring wraps. The RX descriptor now uses `BLOCKACT = INT`; with the HAL's `NOACT`, the transfer-complete flag is never set in a circular transfer, so every 2 KiB received made an RPC time out (the async client then needed a radio reset).
+
 - Check Wi-Fi association and DHCP firmware statuses before reporting a
   successful connection, and reject an unspecified IP address.
 - The interrupt transport no longer drops request bytes when a request is

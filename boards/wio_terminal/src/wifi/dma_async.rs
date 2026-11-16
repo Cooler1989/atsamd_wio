@@ -25,7 +25,7 @@ use atsamd_hal::sercom::uart::{Config, RxDuplex, TxDuplex, Uart};
 use atsamd_hal::sercom::{Sercom, Sercom0};
 use core::sync::atomic::Ordering;
 
-use super::dma::{write_index, RX_RING_LEN};
+use super::dma::{set_block_flag, write_index, RX_RING_LEN};
 use super::{WifiPwr, WifiUart, WifiUartPads, ASYNC_FAULT, LAST_UART_ERROR};
 use crate::wifi_async::{ByteTransport, TransportError};
 
@@ -139,10 +139,11 @@ pub(super) fn new<RxId: ChId, TxId: ChId>(
     let ring_ptr = ring.as_ptr();
     let tx_buf = buffers.tx.as_mut_ptr();
     // The channel comes out of `init` with its interrupts disabled, and they
-    // stay disabled (see the module documentation).
-    let rx = Transfer::new(rx_channel, rx, ring, true)
-        .unwrap()
-        .begin(<Sercom0 as Sercom>::DMA_RX_TRIGGER, TriggerAction::Burst);
+    // stay disabled (see the module documentation). The flag still has to be
+    // set per wrap: see `set_block_flag`.
+    let rx = Transfer::new(rx_channel, rx, ring, true).unwrap();
+    set_block_flag(RxId::USIZE);
+    let rx = rx.begin(<Sercom0 as Sercom>::DMA_RX_TRIGGER, TriggerAction::Burst);
     (
         WifiIo {
             _rx: rx,
